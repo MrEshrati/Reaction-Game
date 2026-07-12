@@ -8,7 +8,7 @@ two-player reaction game with a Pygame client.
 
 - [x] Section 1: TCP socket fundamentals
 - [x] Section 2: Message protocol and framing
-- [ ] Section 3: Threading fundamentals
+- [x] Section 3: Threading fundamentals
 - [ ] Section 4: Minimal authoritative game server
 - [ ] Section 5: Basic Pygame client
 - [ ] Section 6: Object-oriented shape system
