@@ -19,6 +19,11 @@ def create_server_socket(host: str = HOST, port: int = PORT) -> socket.socket:
     option is useful in automated tests.
     """
 
+    """
+    AF_INET = Address family for IPv4
+    AF_INET6 = Address family for IPv6
+    AF_UNIX = Unix domain sockets (Linux/macOS)
+    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))

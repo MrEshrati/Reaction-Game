@@ -2,7 +2,7 @@
 
 import socket
 
-from learning.section_01_sockets.server import BUFFER_SIZE, HOST, PORT
+from server import BUFFER_SIZE, HOST, PORT
 
 
 def exchange_message(
