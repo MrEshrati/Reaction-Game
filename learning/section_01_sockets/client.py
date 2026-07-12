@@ -2,7 +2,11 @@
 
 import socket
 
-from server import BUFFER_SIZE, HOST, PORT
+# support running the client as a module or directly from its folder
+try:
+    from learning.section_01_sockets.server import BUFFER_SIZE, HOST, PORT
+except ModuleNotFoundError:
+    from server import BUFFER_SIZE, HOST, PORT
 
 
 def exchange_message(
@@ -30,4 +34,3 @@ def run_client() -> None:
 
 if __name__ == "__main__":
     run_client()
-

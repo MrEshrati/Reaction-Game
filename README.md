@@ -7,7 +7,7 @@ two-player reaction game with a Pygame client.
 ## Progress
 
 - [x] Section 1: TCP socket fundamentals
-- [ ] Section 2: Message protocol and framing
+- [x] Section 2: Message protocol and framing
 - [ ] Section 3: Threading fundamentals
 - [ ] Section 4: Minimal authoritative game server
 - [ ] Section 5: Basic Pygame client
@@ -19,4 +19,3 @@ two-player reaction game with a Pygame client.
 - [ ] Section 11: Testing and cleanup
 
 The learning examples for each completed section are kept under `learning/`.
-
