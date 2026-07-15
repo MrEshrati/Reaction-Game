@@ -343,9 +343,8 @@ def run_match(server_state):
 # the second successful registration starts exactly one match thread
 def start_match_if_ready(server_state):
     with server_state["state_lock"]:
-        ready = len(server_state["clients"]) == 2
-
-        if not ready or server_state["match_started"]:
+        
+        if len(server_state["clients"]) != 2 or server_state["match_started"]:
             return None
 
         server_state["match_started"] = True
