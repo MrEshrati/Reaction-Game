@@ -10,7 +10,7 @@ two-player reaction game with a Pygame client.
 - [x] Section 2: Message protocol and framing
 - [x] Section 3: Threading fundamentals
 - [x] Section 4: Minimal authoritative game server
-- [ ] Section 5: Basic Pygame client
+- [x] Section 5: Basic Pygame client
 - [ ] Section 6: Object-oriented shape system
 - [ ] Section 7: Click validation and race-condition protection
 - [ ] Section 8: Stamina system

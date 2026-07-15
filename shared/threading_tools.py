@@ -10,7 +10,10 @@ def receive_messages(connection, incoming_messages, stop_event):
             if not stop_event.is_set():
                 error_message = {
                     "type": "error",
-                    "data": {"message": str(error)},
+                    "data": {
+                        "message": str(error),
+                        "connection_closed": True,
+                    },
                 }
                 incoming_messages.put(error_message)
 
