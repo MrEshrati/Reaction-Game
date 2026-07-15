@@ -77,6 +77,7 @@ class BasicPygameClientTest(unittest.TestCase):
             "type": "shape_spawn",
             "data": {
                 "shape_id": 7,
+                "shape_type": "normal",
                 "x": 300,
                 "y": 250,
                 "radius": 30,
@@ -109,6 +110,7 @@ class BasicPygameClientTest(unittest.TestCase):
             "type": "shape_spawn",
             "data": {
                 "shape_id": 11,
+                "shape_type": "normal",
                 "x": 100,
                 "y": 100,
                 "radius": 25,
@@ -134,6 +136,7 @@ class BasicPygameClientTest(unittest.TestCase):
             "type": "shape_spawn",
             "data": {
                 "shape_id": 3,
+                "shape_type": "normal",
                 "x": 200,
                 "y": 200,
                 "radius": 25,
@@ -142,7 +145,7 @@ class BasicPygameClientTest(unittest.TestCase):
             },
         }
         handle_server_message(client_state, shape_message)
-        expires_at = client_state["shapes"][3]["visual_expires_at"]
+        expires_at = client_state["shapes"][3].get_expires_at()
 
         remove_expired_visual_shapes(client_state, expires_at)
 

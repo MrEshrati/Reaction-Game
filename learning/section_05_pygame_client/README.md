@@ -73,7 +73,7 @@ value. It does not create a separate window for each screen.
 
 - `welcome` stores the assigned player ID;
 - `game_start` clears old state and starts the displayed timer;
-- `shape_spawn` adds a circle to the visual dictionary;
+- `shape_spawn` adds a shape object to the visual dictionary;
 - `shape_remove` removes the confirmed shape;
 - `score_update` replaces the displayed authoritative scores;
 - `game_over` opens the final screen;

@@ -6,6 +6,7 @@ import time
 
 import pygame
 
+from game.shapes import shape_from_message
 from shared.protocol import create_message, send_message
 from shared.threading_tools import receive_messages
 
@@ -23,6 +24,8 @@ SECONDARY_TEXT_COLOR = (170, 181, 205)
 ACCENT_COLOR = (64, 156, 255)
 POSITIVE_COLOR = (63, 196, 112)
 NEGATIVE_COLOR = (235, 83, 83)
+SHIELD_COLOR = (58, 128, 246)
+ICE_COLOR = (85, 210, 230)
 BUTTON_COLOR = (44, 126, 224)
 BUTTON_HOVER_COLOR = (75, 154, 245)
 INPUT_COLOR = (40, 50, 72)
@@ -46,6 +49,7 @@ def create_client_state():
         "shapes": {},
         "pending_clicks": [],
         "scores": {},
+        "player_states": {},
         "match_end_time": None,
         "winner": None,
         "game_over_reason": "",
@@ -138,10 +142,8 @@ def handle_server_message(client_state, message):
         client_state["status_message"] = "Click a shape before your opponent."
 
     elif message_type == "shape_spawn":
-        shape = message_data.copy()
-        shape_id = shape["shape_id"]
-        shape["visual_expires_at"] = time.monotonic() + shape["lifetime"]
-        client_state["shapes"][shape_id] = shape
+        shape = shape_from_message(message_data)
+        client_state["shapes"][shape.get_id()] = shape
 
     elif message_type == "shape_remove":
         shape_id = message_data["shape_id"]
@@ -153,16 +155,36 @@ def handle_server_message(client_state, message):
         if message_data.get("reason") == "claimed":
             claimed_by = message_data.get("claimed_by")
             points = message_data.get("points", 0)
+            shape_type = message_data.get("shape_type")
 
             if claimed_by == client_state["player_id"]:
-                client_state["status_message"] = (
-                    "You claimed " + str(points) + " points."
-                )
+                if shape_type == "shield":
+                    client_state["status_message"] = "Shield activated."
+                elif shape_type == "ice":
+                    client_state["status_message"] = "Opponent frozen."
+                elif message_data.get("shield_blocked_penalty"):
+                    client_state["status_message"] = "Shield blocked the penalty."
+                else:
+                    client_state["status_message"] = (
+                        "You claimed " + str(points) + " points."
+                    )
             else:
                 client_state["status_message"] = "Your opponent clicked first."
 
     elif message_type == "score_update":
         client_state["scores"] = message_data.get("scores", {}).copy()
+
+    elif message_type == "player_state":
+        current_time = time.monotonic()
+        client_state["player_states"] = {}
+
+        for player_id, player_state in message_data.get("players", {}).items():
+            client_state["player_states"][player_id] = {
+                "shield_until": current_time
+                + player_state.get("shield_seconds", 0),
+                "frozen_until": current_time
+                + player_state.get("frozen_seconds", 0),
+            }
 
     elif message_type == "game_over":
         client_state["screen_name"] = "final"
@@ -200,7 +222,7 @@ def remove_expired_visual_shapes(client_state, current_time=None):
     expired_shape_ids = []
 
     for shape_id, shape in client_state["shapes"].items():
-        if current_time >= shape["visual_expires_at"]:
+        if shape.is_expired(current_time):
             expired_shape_ids.append(shape_id)
 
     for shape_id in expired_shape_ids:
@@ -215,10 +237,11 @@ def find_clicked_shape(client_state, mouse_position):
     mouse_x, mouse_y = mouse_position
 
     for shape_id, shape in client_state["shapes"].items():
-        x_distance = mouse_x - shape["x"]
-        y_distance = mouse_y - shape["y"]
+        shape_x, shape_y = shape.get_position()
+        x_distance = mouse_x - shape_x
+        y_distance = mouse_y - shape_y
         distance_squared = x_distance * x_distance + y_distance * y_distance
-        radius_squared = shape["radius"] * shape["radius"]
+        radius_squared = shape.get_radius() * shape.get_radius()
 
         if distance_squared <= radius_squared:
             return shape_id
@@ -226,8 +249,29 @@ def find_clicked_shape(client_state, mouse_position):
     return None
 
 
+def get_local_player_effects(client_state, current_time=None):
+    if current_time is None:
+        current_time = time.monotonic()
+
+    player_id = str(client_state["player_id"])
+    player_state = client_state["player_states"].get(player_id, {})
+    shield_seconds = max(0, player_state.get("shield_until", 0) - current_time)
+    frozen_seconds = max(0, player_state.get("frozen_until", 0) - current_time)
+
+    return {
+        "shield_seconds": shield_seconds,
+        "frozen_seconds": frozen_seconds,
+    }
+
+
 # a click is only a request; the client never changes its own score
 def send_shape_click(client_state, mouse_position):
+    player_effects = get_local_player_effects(client_state)
+
+    if player_effects["frozen_seconds"] > 0:
+        client_state["status_message"] = "You are frozen and cannot click."
+        return False
+
     shape_id = find_clicked_shape(client_state, mouse_position)
 
     if shape_id is None or shape_id in client_state["pending_clicks"]:
@@ -381,18 +425,53 @@ def draw_game_screen(surface, fonts, client_state):
         (SCREEN_WIDTH // 2 - timer_text.get_width() // 2, 20),
     )
 
+    player_effects = get_local_player_effects(client_state)
+    effect_parts = []
+
+    if player_effects["shield_seconds"] > 0:
+        shield_time = math.ceil(player_effects["shield_seconds"])
+        effect_parts.append("SHIELD " + str(shield_time) + "s")
+
+    if player_effects["frozen_seconds"] > 0:
+        frozen_time = math.ceil(player_effects["frozen_seconds"])
+        effect_parts.append("FROZEN " + str(frozen_time) + "s")
+
+    if effect_parts:
+        effect_text = " | ".join(effect_parts)
+        rendered_effect = fonts["small"].render(
+            effect_text,
+            True,
+            ICE_COLOR,
+        )
+        surface.blit(
+            rendered_effect,
+            (SCREEN_WIDTH // 2 - rendered_effect.get_width() // 2, 65),
+        )
+
     for shape in client_state["shapes"].values():
-        if shape["points"] >= 0:
+        shape_type = shape.get_shape_type()
+        shape_points = shape.get_points()
+
+        if shape_type == "shield":
+            shape_color = SHIELD_COLOR
+            shape_label = "S"
+        elif shape_type == "ice":
+            shape_color = ICE_COLOR
+            shape_label = "ICE"
+        elif shape_points >= 0:
             shape_color = POSITIVE_COLOR
+            shape_label = str(shape_points)
         else:
             shape_color = NEGATIVE_COLOR
+            shape_label = str(shape_points)
 
-        center = (shape["x"], shape["y"])
-        pygame.draw.circle(surface, shape_color, center, shape["radius"])
-        pygame.draw.circle(surface, TEXT_COLOR, center, shape["radius"], 3)
+        center = shape.get_position()
+        radius = shape.get_radius()
+        pygame.draw.circle(surface, shape_color, center, radius)
+        pygame.draw.circle(surface, TEXT_COLOR, center, radius, 3)
 
         points_text = fonts["shape"].render(
-            str(shape["points"]),
+            shape_label,
             True,
             TEXT_COLOR,
         )

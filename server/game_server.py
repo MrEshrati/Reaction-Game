@@ -1,8 +1,8 @@
-import random
 import socket
 import threading
 import time
 
+from game.shapes import create_random_shape as create_shape_object
 from shared.protocol import create_message, receive_message, send_message
 
 
@@ -21,6 +21,7 @@ def create_server_state(
     return {
         "clients": {},
         "scores": {},
+        "player_effects": {},
         "active_shapes": {},
         "next_player_id": 1,
         "next_shape_id": 1,
@@ -45,6 +46,24 @@ def copy_scores_for_message(server_state):
         message_scores[str(player_id)] = score
 
     return message_scores
+
+
+# effect end times stay private on the server; clients receive remaining time
+def copy_player_effects_for_message(server_state, current_time=None):
+    if current_time is None:
+        current_time = time.monotonic()
+
+    message_effects = {}
+
+    for player_id, effects in server_state["player_effects"].items():
+        shield_seconds = max(0, effects["shield_until"] - current_time)
+        frozen_seconds = max(0, effects["frozen_until"] - current_time)
+        message_effects[str(player_id)] = {
+            "shield_seconds": shield_seconds,
+            "frozen_seconds": frozen_seconds,
+        }
+
+    return message_effects
 
 
 # each client has a send lock so two server threads cannot mix message bytes
@@ -74,6 +93,27 @@ def broadcast_message(server_state, message):
         remove_client(server_state, player_id)
 
 
+# hallucinations can use this function to target only their affected player
+def broadcast_shape_spawn(server_state, shape):
+    with server_state["state_lock"]:
+        clients = []
+        for client in server_state["clients"].values():
+            clients.append(client)
+
+    shape_message = create_message("shape_spawn", shape.get_spawn_data())
+    disconnected_players = []
+
+    for client in clients:
+        if not shape.is_visible_to(client["player_id"]):
+            continue
+
+        if not safe_send(client, shape_message):
+            disconnected_players.append(client["player_id"])
+
+    for player_id in disconnected_players:
+        remove_client(server_state, player_id)
+
+
 # a match accepts exactly two players and no late joins
 def register_client(server_state, connection, address, player_name):
     with server_state["state_lock"]:
@@ -96,6 +136,10 @@ def register_client(server_state, connection, address, player_name):
 
         server_state["clients"][player_id] = client
         server_state["scores"][player_id] = 0
+        server_state["player_effects"][player_id] = {
+            "shield_until": 0,
+            "frozen_until": 0,
+        }
         return player_id
 
 
@@ -114,27 +158,20 @@ def remove_client(server_state, player_id):
             pass
 
 
-# this function creates one simple normal shape for the minimal server
+# this function stores whichever concrete shape the polymorphic factory creates
 def create_random_shape(server_state):
-    possible_points = [-3, -2, -1, 1, 2, 3, 4, 5, 6]
-
     with server_state["state_lock"]:
         shape_id = server_state["next_shape_id"]
         server_state["next_shape_id"] += 1
 
-        shape = {
-            "shape_id": shape_id,
-            "shape_type": "normal",
-            "x": random.randint(60, SCREEN_WIDTH - 60),
-            "y": random.randint(120, SCREEN_HEIGHT - 60),
-            "radius": 30,
-            "points": random.choice(possible_points),
-            "lifetime": server_state["shape_lifetime"],
-            "expires_at": time.monotonic() + server_state["shape_lifetime"],
-        }
-
+        shape = create_shape_object(
+            shape_id,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            server_state["shape_lifetime"],
+        )
         server_state["active_shapes"][shape_id] = shape
-        return shape.copy()
+        return shape
 
 
 # expired shapes are removed by the server, never by a client
@@ -144,13 +181,42 @@ def remove_expired_shapes(server_state):
 
     with server_state["state_lock"]:
         for shape_id, shape in server_state["active_shapes"].items():
-            if current_time >= shape["expires_at"]:
+            if shape.is_expired(current_time):
                 expired_shape_ids.append(shape_id)
 
         for shape_id in expired_shape_ids:
             del server_state["active_shapes"][shape_id]
 
     return expired_shape_ids
+
+
+# special effects are applied while the same state lock protects the click
+def apply_shape_effect(server_state, player_id, effect, current_time):
+    if effect is None:
+        return
+
+    effect_type = effect["type"]
+    effect_duration = effect["duration"]
+
+    if effect_type == "shield":
+        current_end_time = server_state["player_effects"][player_id]["shield_until"]
+        start_time = max(current_time, current_end_time)
+        server_state["player_effects"][player_id]["shield_until"] = (
+            start_time + effect_duration
+        )
+
+    elif effect_type == "ice":
+        for opponent_id in server_state["clients"]:
+            if opponent_id == player_id:
+                continue
+
+            current_end_time = server_state["player_effects"][opponent_id][
+                "frozen_until"
+            ]
+            start_time = max(current_time, current_end_time)
+            server_state["player_effects"][opponent_id]["frozen_until"] = (
+                start_time + effect_duration
+            )
 
 
 # this is the authoritative and atomic check-and-change click operation
@@ -168,6 +234,15 @@ def process_click(server_state, player_id, shape_id):
                 "error": "The player is not connected.",
             }
 
+        current_time = time.monotonic()
+        player_effects = server_state["player_effects"][player_id]
+
+        if current_time < player_effects["frozen_until"]:
+            return {
+                "accepted": False,
+                "error": "The player is frozen.",
+            }
+
         shape = server_state["active_shapes"].get(shape_id)
 
         if shape is None:
@@ -176,23 +251,47 @@ def process_click(server_state, player_id, shape_id):
                 "error": "The shape is no longer available.",
             }
 
-        if time.monotonic() >= shape["expires_at"]:
+        if not shape.is_visible_to(player_id):
+            return {
+                "accepted": False,
+                "error": "The shape is not available to this player.",
+            }
+
+        if shape.is_expired(current_time):
             del server_state["active_shapes"][shape_id]
             return {
                 "accepted": False,
                 "error": "The shape has expired.",
             }
 
+        click_result = shape.get_click_result()
+        awarded_points = click_result["points"]
+        shield_blocked_penalty = False
+
+        if awarded_points < 0 and current_time < player_effects["shield_until"]:
+            awarded_points = 0
+            shield_blocked_penalty = True
+
         del server_state["active_shapes"][shape_id]
-        server_state["scores"][player_id] += shape["points"]
+        server_state["scores"][player_id] += awarded_points
+        apply_shape_effect(
+            server_state,
+            player_id,
+            click_result["effect"],
+            current_time,
+        )
         scores = copy_scores_for_message(server_state)
+        player_states = copy_player_effects_for_message(server_state, current_time)
 
         return {
             "accepted": True,
             "shape_id": shape_id,
             "claimed_by": player_id,
-            "points": shape["points"],
+            "shape_type": shape.get_shape_type(),
+            "points": awarded_points,
+            "shield_blocked_penalty": shield_blocked_penalty,
             "scores": scores,
+            "player_states": player_states,
         }
 
 
@@ -232,7 +331,9 @@ def handle_client_message(server_state, client, message):
             "shape_id": result["shape_id"],
             "reason": "claimed",
             "claimed_by": result["claimed_by"],
+            "shape_type": result["shape_type"],
             "points": result["points"],
+            "shield_blocked_penalty": result["shield_blocked_penalty"],
         },
     )
     broadcast_message(server_state, remove_message)
@@ -242,6 +343,12 @@ def handle_client_message(server_state, client, message):
         {"scores": result["scores"]},
     )
     broadcast_message(server_state, score_message)
+
+    player_state_message = create_message(
+        "player_state",
+        {"players": result["player_states"]},
+    )
+    broadcast_message(server_state, player_state_message)
 
 
 # the winner is decided from server scores after the match finishes
@@ -279,6 +386,7 @@ def run_match(server_state):
         match_duration = server_state["match_duration"]
         match_end_time = time.monotonic() + match_duration
         starting_scores = copy_scores_for_message(server_state)
+        starting_player_states = copy_player_effects_for_message(server_state)
 
     start_message = create_message(
         "game_start",
@@ -288,6 +396,11 @@ def run_match(server_state):
         },
     )
     broadcast_message(server_state, start_message)
+    player_state_message = create_message(
+        "player_state",
+        {"players": starting_player_states},
+    )
+    broadcast_message(server_state, player_state_message)
 
     while time.monotonic() < match_end_time:
         if server_state["match_stop_event"].is_set():
@@ -306,10 +419,7 @@ def run_match(server_state):
             broadcast_message(server_state, remove_message)
 
         shape = create_random_shape(server_state)
-        shape_message_data = shape.copy()
-        del shape_message_data["expires_at"]
-        shape_message = create_message("shape_spawn", shape_message_data)
-        broadcast_message(server_state, shape_message)
+        broadcast_shape_spawn(server_state, shape)
 
         remaining_time = match_end_time - time.monotonic()
         wait_time = min(server_state["shape_interval"], remaining_time)

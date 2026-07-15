@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 
+from game.shapes import NormalShape
 from server.game_server import (
     create_random_shape,
     create_server_state,
@@ -57,9 +58,13 @@ class AuthoritativeServerTest(unittest.TestCase):
             2: {"player_id": 2},
         }
         server_state["scores"] = {1: 0, 2: 0}
+        server_state["player_effects"] = {
+            1: {"shield_until": 0, "frozen_until": 0},
+            2: {"shield_until": 0, "frozen_until": 0},
+        }
         server_state["match_running"] = True
         shape = create_random_shape(server_state)
-        shape_id = shape["shape_id"]
+        shape_id = shape.get_id()
         start_event = threading.Event()
         results = queue.Queue()
 
@@ -85,7 +90,7 @@ class AuthoritativeServerTest(unittest.TestCase):
         total_score += server_state["scores"][2]
 
         self.assertEqual(accepted_clicks, 1)
-        self.assertEqual(total_score, shape["points"])
+        self.assertEqual(total_score, shape.get_points())
         self.assertNotIn(shape_id, server_state["active_shapes"])
 
     def test_match_broadcasts_start_shapes_and_game_over(self):
@@ -125,12 +130,15 @@ class AuthoritativeServerTest(unittest.TestCase):
         server_state = create_server_state()
         server_state["clients"] = {1: {"player_id": 1}}
         server_state["scores"] = {1: 0}
+        server_state["player_effects"] = {
+            1: {"shield_until": 0, "frozen_until": 0},
+        }
         server_state["match_running"] = True
-        shape = create_random_shape(server_state)
-        server_state["active_shapes"][shape["shape_id"]]["expires_at"] = 0
+        shape = NormalShape(1, 200, 200, 30, 3, 1, created_at=0)
+        server_state["active_shapes"][shape.get_id()] = shape
 
-        result = process_click(server_state, 1, shape["shape_id"])
+        result = process_click(server_state, 1, shape.get_id())
 
         self.assertFalse(result["accepted"])
         self.assertEqual(server_state["scores"][1], 0)
-        self.assertNotIn(shape["shape_id"], server_state["active_shapes"])
+        self.assertNotIn(shape.get_id(), server_state["active_shapes"])
