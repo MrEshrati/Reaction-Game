@@ -515,8 +515,14 @@ def handle_pygame_event(event, client_state):
             send_shape_click(client_state, event.pos)
 
 
+# initialize only the display and font modules used by this client
+def initialize_pygame():
+    pygame.display.init()
+    pygame.font.init()
+
+
 def run_game_client():
-    pygame.init()
+    initialize_pygame()
     surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Reaction Game")
     clock = pygame.time.Clock()

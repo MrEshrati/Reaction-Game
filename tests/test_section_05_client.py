@@ -5,11 +5,13 @@ import unittest
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
+import pygame
 from client.game_client import (
     create_client_state,
     find_clicked_shape,
     get_remaining_seconds,
     handle_server_message,
+    initialize_pygame,
     remove_expired_visual_shapes,
     send_shape_click,
 )
@@ -30,6 +32,20 @@ class RecordingConnection:
 
 
 class BasicPygameClientTest(unittest.TestCase):
+    def test_required_pygame_modules_can_poll_events(self):
+        pygame.quit()
+        initialize_pygame()
+        pygame.display.set_mode((100, 100))
+        pygame.event.clear()
+        test_event = pygame.event.Event(pygame.USEREVENT, {"value": 1})
+        pygame.event.post(test_event)
+
+        events = pygame.event.get()
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].value, 1)
+        pygame.quit()
+
     def test_welcome_and_game_start_change_screens(self):
         client_state = create_client_state()
         welcome_message = {

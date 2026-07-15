@@ -37,6 +37,21 @@ state.
 The network thread never calls `pygame.draw`, `pygame.display`, or
 `pygame.event`. This avoids unpredictable window behavior.
 
+## Pygame initialization
+
+The client initializes only the modules it uses:
+
+```python
+pygame.display.init()
+pygame.font.init()
+```
+
+`pygame.init()` tries to initialize every imported Pygame module, including
+optional input and audio systems. On some Windows environments, one of those
+unused systems can create a malformed startup event and make the first
+`pygame.event.get()` fail. Separate initialization avoids that event and keeps
+the client dependencies explicit.
+
 ## Client screens
 
 The client state has a `screen_name` value:
