@@ -92,8 +92,8 @@ The polymorphic click result now includes `stamina_cost`:
 - hallucinations cost 5 but award no points.
 
 Hallucinations still inherit a normal shape's hidden point category for the
-future stress rules, but their click result changes the awarded points to
-zero, matching the PDF requirement.
+stress rules, but their click result changes the awarded points to zero,
+matching the PDF requirement.
 
 ## Low-stamina visibility
 

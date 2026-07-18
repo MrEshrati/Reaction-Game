@@ -3,7 +3,8 @@ import socket
 import threading
 import time
 
-from game.player import PlayerStamina
+from game.player import PlayerStamina, PlayerStress
+from game.shapes import create_hallucination_shape
 from game.shapes import create_random_shape as create_shape_object
 from shared.protocol import create_message, receive_message, send_message
 
@@ -14,6 +15,8 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 LOW_STAMINA_HIDE_CHANCE = 0.5
 STAMINA_UPDATE_INTERVAL = 0.1
+EMPTY_CLICK_STRESS = 5
+HALLUCINATION_CHECK_INTERVAL = 3
 
 
 # this function creates all shared server state in one place
@@ -27,8 +30,10 @@ def create_server_state(
         "scores": {},
         "player_effects": {},
         "player_stamina": {},
+        "player_stress": {},
         "active_shapes": {},
         "shape_visibility": {},
+        "next_hallucination_times": {},
         "next_player_id": 1,
         "next_shape_id": 1,
         "match_duration": match_duration,
@@ -69,10 +74,12 @@ def copy_player_effects_for_message(server_state, current_time=None):
             current_time,
             effects["frozen_until"],
         )
+        stress_value = server_state["player_stress"][player_id].get_value()
         message_effects[str(player_id)] = {
             "shield_seconds": shield_seconds,
             "frozen_seconds": frozen_seconds,
             "stamina": stamina_value,
+            "stress": stress_value,
         }
 
     return message_effects
@@ -106,20 +113,28 @@ def broadcast_message(server_state, message):
 
 
 # recovery is calculated on the server and sent only when a value changes
-def broadcast_stamina_if_changed(server_state):
+def broadcast_player_state_if_changed(server_state):
     current_time = time.monotonic()
 
     with server_state["state_lock"]:
-        stamina_changed = False
+        player_state_changed = False
 
         for player_id, stamina in server_state["player_stamina"].items():
             frozen_until = server_state["player_effects"][player_id][
                 "frozen_until"
             ]
-            if stamina.update(current_time, frozen_until):
-                stamina_changed = True
+            stress = server_state["player_stress"][player_id]
+            if stress.update(
+                stamina.get_stored_value(),
+                current_time,
+                frozen_until,
+            ):
+                player_state_changed = True
 
-        if not stamina_changed:
+            if stamina.update(current_time, frozen_until):
+                player_state_changed = True
+
+        if not player_state_changed:
             return False
 
         player_states = copy_player_effects_for_message(
@@ -133,6 +148,51 @@ def broadcast_stamina_if_changed(server_state):
     )
     broadcast_message(server_state, player_state_message)
     return True
+
+
+# stressed players receive private fake normal shapes on the server schedule
+def spawn_due_hallucinations(server_state):
+    current_time = time.monotonic()
+    new_shapes = []
+
+    with server_state["state_lock"]:
+        for player_id in server_state["clients"]:
+            stress = server_state["player_stress"][player_id]
+            hallucination_interval = stress.get_hallucination_interval()
+
+            if hallucination_interval is None:
+                server_state["next_hallucination_times"][player_id] = (
+                    current_time + HALLUCINATION_CHECK_INTERVAL
+                )
+                continue
+
+            next_spawn_time = server_state["next_hallucination_times"].get(
+                player_id,
+                current_time + hallucination_interval,
+            )
+
+            if current_time < next_spawn_time:
+                continue
+
+            shape_id = server_state["next_shape_id"]
+            server_state["next_shape_id"] += 1
+            shape = create_hallucination_shape(
+                shape_id,
+                SCREEN_WIDTH,
+                SCREEN_HEIGHT,
+                server_state["shape_lifetime"],
+                player_id,
+            )
+            server_state["active_shapes"][shape_id] = shape
+            server_state["next_hallucination_times"][player_id] = (
+                current_time + hallucination_interval
+            )
+            new_shapes.append(shape)
+
+    for shape in new_shapes:
+        broadcast_shape_spawn(server_state, shape)
+
+    return new_shapes
 
 
 # hallucinations can use this function to target only their affected player
@@ -202,6 +262,10 @@ def register_client(server_state, connection, address, player_name):
             "frozen_until": 0,
         }
         server_state["player_stamina"][player_id] = PlayerStamina()
+        server_state["player_stress"][player_id] = PlayerStress()
+        server_state["next_hallucination_times"][player_id] = (
+            time.monotonic() + HALLUCINATION_CHECK_INTERVAL
+        )
         return player_id
 
 
@@ -277,6 +341,12 @@ def apply_shape_effect(server_state, player_id, effect, current_time):
                 "frozen_until"
             ]
             opponent_stamina = server_state["player_stamina"][opponent_id]
+            opponent_stress = server_state["player_stress"][opponent_id]
+            opponent_stress.update(
+                opponent_stamina.get_stored_value(),
+                current_time,
+                current_end_time,
+            )
             opponent_stamina.update(current_time, current_end_time)
             start_time = max(current_time, current_end_time)
             server_state["player_effects"][opponent_id]["frozen_until"] = (
@@ -334,6 +404,12 @@ def process_click(server_state, player_id, shape_id, click_position):
         current_time = time.monotonic()
         player_effects = server_state["player_effects"][player_id]
         player_stamina = server_state["player_stamina"][player_id]
+        player_stress = server_state["player_stress"][player_id]
+        player_stress.update(
+            player_stamina.get_stored_value(),
+            current_time,
+            player_effects["frozen_until"],
+        )
 
         if current_time < player_effects["frozen_until"]:
             return {
@@ -402,6 +478,7 @@ def process_click(server_state, player_id, shape_id, click_position):
         del server_state["active_shapes"][shape_id]
         server_state["shape_visibility"].pop(shape_id, None)
         stamina_cost = click_result["stamina_cost"]
+        player_stress.change(click_result["stress_change"])
         if stamina_cost > 0:
             player_stamina.spend_for_click(
                 stamina_cost,
@@ -430,6 +507,102 @@ def process_click(server_state, player_id, shape_id, click_position):
         }
 
 
+# an empty click changes stamina and stress but never changes a score
+def process_empty_click(server_state, player_id, click_position):
+    with server_state["state_lock"]:
+        if not server_state["match_running"]:
+            return {
+                "accepted": False,
+                "error": "The match is not running.",
+            }
+
+        if player_id not in server_state["clients"]:
+            return {
+                "accepted": False,
+                "error": "The player is not connected.",
+            }
+
+        if not isinstance(click_position, (list, tuple)):
+            return {
+                "accepted": False,
+                "error": "A click needs an x and y position.",
+            }
+
+        if len(click_position) != 2:
+            return {
+                "accepted": False,
+                "error": "A click needs an x and y position.",
+            }
+
+        click_x, click_y = click_position
+        if type(click_x) is not int or type(click_y) is not int:
+            return {
+                "accepted": False,
+                "error": "Click coordinates must be integers.",
+            }
+
+        if not 0 <= click_x < SCREEN_WIDTH or not 0 <= click_y < SCREEN_HEIGHT:
+            return {
+                "accepted": False,
+                "error": "Click coordinates are outside the game window.",
+            }
+
+        current_time = time.monotonic()
+        player_effects = server_state["player_effects"][player_id]
+        player_stamina = server_state["player_stamina"][player_id]
+        player_stress = server_state["player_stress"][player_id]
+        player_stress.update(
+            player_stamina.get_stored_value(),
+            current_time,
+            player_effects["frozen_until"],
+        )
+
+        if current_time < player_effects["frozen_until"]:
+            return {
+                "accepted": False,
+                "error": "The player is frozen.",
+            }
+
+        if not player_stamina.can_play(
+            current_time,
+            player_effects["frozen_until"],
+        ):
+            return {
+                "accepted": False,
+                "error": "The player's stamina is too low.",
+            }
+
+        for shape_id, shape in server_state["active_shapes"].items():
+            if shape.is_expired(current_time):
+                continue
+
+            if not shape.is_visible_to(player_id):
+                continue
+
+            visible_player_ids = server_state["shape_visibility"].get(shape_id)
+            if visible_player_ids is not None:
+                if player_id not in visible_player_ids:
+                    continue
+
+            if shape.contains_point(click_x, click_y):
+                return {
+                    "accepted": False,
+                    "error": "The click position is not empty.",
+                }
+
+        player_stamina.spend_for_click(
+            current_time=current_time,
+            frozen_until=player_effects["frozen_until"],
+        )
+        player_stress.change(EMPTY_CLICK_STRESS)
+        player_states = copy_player_effects_for_message(server_state, current_time)
+
+        return {
+            "accepted": True,
+            "player_states": player_states,
+        }
+
+
 # only click messages are accepted while the minimal match is running
 def handle_client_message(server_state, client, message):
     if message["type"] != "click":
@@ -441,11 +614,20 @@ def handle_client_message(server_state, client, message):
         return
 
     click_data = message["data"]
+
+    if "shape_id" not in click_data:
+        error_message = create_message(
+            "error",
+            {"message": "A click needs a shape_id field."},
+        )
+        safe_send(client, error_message)
+        return
+
     shape_id = click_data.get("shape_id")
     click_x = click_data.get("x")
     click_y = click_data.get("y")
 
-    if type(shape_id) is not int:
+    if shape_id is not None and type(shape_id) is not int:
         error_message = create_message(
             "error",
             {"message": "A click needs an integer shape_id."},
@@ -462,6 +644,28 @@ def handle_client_message(server_state, client, message):
             },
         )
         safe_send(client, error_message)
+        return
+
+    if shape_id is None:
+        result = process_empty_click(
+            server_state,
+            client["player_id"],
+            (click_x, click_y),
+        )
+
+        if not result["accepted"]:
+            error_message = create_message(
+                "error",
+                {"message": result["error"]},
+            )
+            safe_send(client, error_message)
+            return
+
+        player_state_message = create_message(
+            "player_state",
+            {"players": result["player_states"]},
+        )
+        broadcast_message(server_state, player_state_message)
         return
 
     result = process_click(
@@ -591,7 +795,8 @@ def run_match(server_state):
                 if server_state["match_stop_event"].wait(short_wait):
                     break
 
-                broadcast_stamina_if_changed(server_state)
+                broadcast_player_state_if_changed(server_state)
+                spawn_due_hallucinations(server_state)
 
     with server_state["state_lock"]:
         disconnected_early = server_state["match_stop_event"].is_set()

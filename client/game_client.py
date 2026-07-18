@@ -1,5 +1,6 @@
 import math
 import queue
+import random
 import socket
 import threading
 import time
@@ -28,12 +29,17 @@ SHIELD_COLOR = (58, 128, 246)
 ICE_COLOR = (85, 210, 230)
 STAMINA_COLOR = (245, 190, 65)
 STAMINA_BACKGROUND_COLOR = (53, 63, 82)
+STRESS_COLOR = (244, 100, 105)
+STRESS_BACKGROUND_COLOR = (73, 52, 65)
 BUTTON_COLOR = (44, 126, 224)
 BUTTON_HOVER_COLOR = (75, 154, 245)
 INPUT_COLOR = (40, 50, 72)
 
 CONNECT_BUTTON = pygame.Rect(280, 370, 240, 55)
 NAME_INPUT_BOX = pygame.Rect(220, 285, 360, 58)
+MOUSE_CALIBRATION_DURATION = 2
+MOUSE_JUMP_INTERVAL = 3
+MOUSE_TRAIL_LENGTH = 8
 
 
 # this function creates all client state in one place
@@ -56,6 +62,14 @@ def create_client_state():
         "winner": None,
         "game_over_reason": "",
         "status_message": "Enter your name and connect to the server.",
+        "virtual_mouse_position": [SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2],
+        "last_system_mouse_position": None,
+        "mouse_calibration_end_time": None,
+        "mouse_reference_total": 0,
+        "mouse_reference_samples": 0,
+        "mouse_reference_ratio": 1,
+        "next_mouse_jump_time": 0,
+        "mouse_trail": [],
     }
 
 
@@ -142,6 +156,21 @@ def handle_server_message(client_state, message):
         client_state["pending_clicks"].clear()
         client_state["match_end_time"] = time.monotonic() + duration
         client_state["status_message"] = "Click a shape before your opponent."
+        client_state["virtual_mouse_position"] = [
+            SCREEN_WIDTH // 2,
+            SCREEN_HEIGHT // 2,
+        ]
+        client_state["last_system_mouse_position"] = None
+        client_state["mouse_calibration_end_time"] = (
+            time.monotonic() + MOUSE_CALIBRATION_DURATION
+        )
+        client_state["mouse_reference_total"] = 0
+        client_state["mouse_reference_samples"] = 0
+        client_state["mouse_reference_ratio"] = 1
+        client_state["next_mouse_jump_time"] = (
+            time.monotonic() + MOUSE_JUMP_INTERVAL
+        )
+        client_state["mouse_trail"].clear()
 
     elif message_type == "shape_spawn":
         shape = shape_from_message(message_data)
@@ -192,6 +221,7 @@ def handle_server_message(client_state, message):
                 "frozen_until": current_time
                 + player_state.get("frozen_seconds", 0),
                 "stamina": player_state.get("stamina", 100),
+                "stress": player_state.get("stress", 0),
             }
 
         local_player_id = str(client_state["player_id"])
@@ -284,6 +314,7 @@ def get_local_player_effects(client_state, current_time=None):
         "shield_seconds": shield_seconds,
         "frozen_seconds": frozen_seconds,
         "stamina": player_state.get("stamina", 100),
+        "stress": player_state.get("stress", 0),
     }
 
 
@@ -293,6 +324,104 @@ def get_stamina_darkness(stamina_value):
 
     darkness_progress = (60 - stamina_value) / 20
     return int(darkness_progress * 140)
+
+
+def get_stress_speed_multiplier(stress_value):
+    if stress_value <= 10:
+        return 1
+
+    if stress_value <= 50:
+        return 0.85
+
+    return 0.6
+
+
+def calculate_mouse_movement(raw_movement, reference_ratio, stress_value):
+    speed_multiplier = get_stress_speed_multiplier(stress_value)
+    x_movement = raw_movement[0] * reference_ratio * speed_multiplier
+    y_movement = raw_movement[1] * reference_ratio * speed_multiplier
+    return x_movement, y_movement
+
+
+# raw movement is converted into a protected virtual cursor position
+def update_virtual_mouse(
+    client_state,
+    current_time=None,
+    raw_movement=None,
+    system_position=None,
+):
+    if client_state["screen_name"] != "game":
+        return tuple(client_state["virtual_mouse_position"])
+
+    if current_time is None:
+        current_time = time.monotonic()
+
+    if raw_movement is None:
+        raw_movement = pygame.mouse.get_rel()
+
+    if system_position is None:
+        system_position = pygame.mouse.get_pos()
+
+    previous_system_position = client_state["last_system_mouse_position"]
+    calibration_end_time = client_state["mouse_calibration_end_time"]
+
+    if calibration_end_time is None:
+        calibration_end_time = current_time + MOUSE_CALIBRATION_DURATION
+        client_state["mouse_calibration_end_time"] = calibration_end_time
+
+    if previous_system_position is not None:
+        raw_distance = math.hypot(raw_movement[0], raw_movement[1])
+        system_x_change = system_position[0] - previous_system_position[0]
+        system_y_change = system_position[1] - previous_system_position[1]
+        system_distance = math.hypot(system_x_change, system_y_change)
+
+        if current_time <= calibration_end_time and raw_distance > 0:
+            movement_ratio = system_distance / raw_distance
+
+            if 0.1 <= movement_ratio <= 5:
+                client_state["mouse_reference_total"] += movement_ratio
+                client_state["mouse_reference_samples"] += 1
+                sample_count = client_state["mouse_reference_samples"]
+                client_state["mouse_reference_ratio"] = (
+                    client_state["mouse_reference_total"] / sample_count
+                )
+
+    client_state["last_system_mouse_position"] = system_position
+    player_effects = get_local_player_effects(client_state, current_time)
+    stress_value = player_effects["stress"]
+    mouse_movement = calculate_mouse_movement(
+        raw_movement,
+        client_state["mouse_reference_ratio"],
+        stress_value,
+    )
+    mouse_x = client_state["virtual_mouse_position"][0] + mouse_movement[0]
+    mouse_y = client_state["virtual_mouse_position"][1] + mouse_movement[1]
+    mouse_x = max(0, min(SCREEN_WIDTH - 1, mouse_x))
+    mouse_y = max(0, min(SCREEN_HEIGHT - 1, mouse_y))
+
+    if stress_value >= 31:
+        if current_time >= client_state["next_mouse_jump_time"]:
+            mouse_x = random.randint(20, SCREEN_WIDTH - 20)
+            mouse_y = random.randint(110, SCREEN_HEIGHT - 20)
+            client_state["next_mouse_jump_time"] = (
+                current_time + MOUSE_JUMP_INTERVAL
+            )
+    else:
+        client_state["next_mouse_jump_time"] = (
+            current_time + MOUSE_JUMP_INTERVAL
+        )
+
+    client_state["virtual_mouse_position"] = [mouse_x, mouse_y]
+
+    if stress_value >= 51:
+        client_state["mouse_trail"].append((round(mouse_x), round(mouse_y)))
+        client_state["mouse_trail"] = client_state["mouse_trail"][
+            -MOUSE_TRAIL_LENGTH:
+        ]
+    else:
+        client_state["mouse_trail"].clear()
+
+    return round(mouse_x), round(mouse_y)
 
 
 # a click is only a request; the client never changes its own score
@@ -309,7 +438,7 @@ def send_shape_click(client_state, mouse_position):
 
     shape_id = find_clicked_shape(client_state, mouse_position)
 
-    if shape_id is None or shape_id in client_state["pending_clicks"]:
+    if shape_id in client_state["pending_clicks"]:
         return False
 
     mouse_x, mouse_y = mouse_position
@@ -324,7 +453,8 @@ def send_shape_click(client_state, mouse_position):
 
     try:
         send_message(client_state["connection"], click_message)
-        client_state["pending_clicks"].append(shape_id)
+        if shape_id is not None:
+            client_state["pending_clicks"].append(shape_id)
         return True
     except (ConnectionError, OSError, ValueError) as error:
         client_state["status_message"] = "Could not send click: " + str(error)
@@ -437,6 +567,50 @@ def draw_waiting_screen(surface, fonts, client_state):
     )
 
 
+def get_cursor_points(mouse_position):
+    mouse_x, mouse_y = mouse_position
+    return [
+        (mouse_x, mouse_y),
+        (mouse_x, mouse_y + 22),
+        (mouse_x + 6, mouse_y + 16),
+        (mouse_x + 11, mouse_y + 25),
+        (mouse_x + 15, mouse_y + 23),
+        (mouse_x + 10, mouse_y + 14),
+        (mouse_x + 18, mouse_y + 14),
+    ]
+
+
+def draw_virtual_mouse(surface, client_state):
+    trail_overlay = pygame.Surface(
+        (SCREEN_WIDTH, SCREEN_HEIGHT),
+        pygame.SRCALPHA,
+    )
+    mouse_trail = client_state["mouse_trail"]
+
+    for trail_index, trail_position in enumerate(mouse_trail):
+        alpha = round(120 * (trail_index + 1) / max(1, len(mouse_trail)))
+        pygame.draw.polygon(
+            trail_overlay,
+            (TEXT_COLOR[0], TEXT_COLOR[1], TEXT_COLOR[2], alpha),
+            get_cursor_points(trail_position),
+        )
+
+    surface.blit(trail_overlay, (0, 0))
+    mouse_position = client_state["virtual_mouse_position"]
+    pygame.draw.polygon(
+        surface,
+        TEXT_COLOR,
+        get_cursor_points(mouse_position),
+    )
+    pygame.draw.lines(
+        surface,
+        BACKGROUND_COLOR,
+        True,
+        get_cursor_points(mouse_position),
+        2,
+    )
+
+
 def draw_game_screen(surface, fonts, client_state):
     surface.fill(BACKGROUND_COLOR)
     pygame.draw.rect(surface, PANEL_COLOR, (0, 0, SCREEN_WIDTH, 92))
@@ -471,6 +645,7 @@ def draw_game_screen(surface, fonts, client_state):
     player_effects = get_local_player_effects(client_state)
     effect_parts = []
     stamina_value = player_effects["stamina"]
+    stress_value = player_effects["stress"]
 
     stamina_label = fonts["small"].render(
         "STAMINA " + str(round(stamina_value)) + "%",
@@ -496,6 +671,33 @@ def draw_game_screen(surface, fonts, client_state):
         surface,
         STAMINA_COLOR,
         stamina_bar,
+        border_radius=5,
+    )
+
+    stress_label = fonts["small"].render(
+        "STRESS " + str(round(stress_value)) + "%",
+        True,
+        STRESS_COLOR,
+    )
+    surface.blit(stress_label, (545, 65))
+    stress_bar_background = pygame.Rect(650, 70, 110, 10)
+    pygame.draw.rect(
+        surface,
+        STRESS_BACKGROUND_COLOR,
+        stress_bar_background,
+        border_radius=5,
+    )
+    stress_width = round(stress_bar_background.width * stress_value / 100)
+    stress_bar = pygame.Rect(
+        stress_bar_background.x,
+        stress_bar_background.y,
+        stress_width,
+        stress_bar_background.height,
+    )
+    pygame.draw.rect(
+        surface,
+        STRESS_COLOR,
+        stress_bar,
         border_radius=5,
     )
 
@@ -566,6 +768,7 @@ def draw_game_screen(surface, fonts, client_state):
         SECONDARY_TEXT_COLOR,
     )
     surface.blit(status_text, (status_bar.x + 12, status_bar.y + 7))
+    draw_virtual_mouse(surface, client_state)
 
 
 def draw_final_screen(surface, fonts, client_state):
@@ -671,7 +874,8 @@ def handle_pygame_event(event, client_state):
 
     elif client_state["screen_name"] == "game":
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            send_shape_click(client_state, event.pos)
+            mouse_position = client_state["virtual_mouse_position"]
+            send_shape_click(client_state, mouse_position)
 
 
 # initialize only the display and font modules used by this client
@@ -694,12 +898,26 @@ def run_game_client():
         "small": pygame.font.SysFont("arial", 17),
     }
     client_state = create_client_state()
+    mouse_is_hidden = False
 
     while client_state["running"]:
+        process_incoming_messages(client_state)
+
+        if client_state["screen_name"] == "game":
+            if not mouse_is_hidden:
+                pygame.mouse.set_visible(False)
+                pygame.event.set_grab(True)
+                pygame.mouse.get_rel()
+                mouse_is_hidden = True
+
+            update_virtual_mouse(client_state)
+        elif mouse_is_hidden:
+            pygame.mouse.set_visible(True)
+            pygame.event.set_grab(False)
+            mouse_is_hidden = False
+
         for event in pygame.event.get():
             handle_pygame_event(event, client_state)
-
-        process_incoming_messages(client_state)
 
         if client_state["screen_name"] == "game":
             remove_expired_visual_shapes(client_state)
@@ -708,5 +926,7 @@ def run_game_client():
         pygame.display.flip()
         clock.tick(FRAMES_PER_SECOND)
 
+    pygame.mouse.set_visible(True)
+    pygame.event.set_grab(False)
     disconnect_client(client_state)
     pygame.quit()

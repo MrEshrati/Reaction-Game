@@ -73,8 +73,8 @@ no longer needs to know how the expiration time was calculated.
 `HallucinationShape` inherits from `NormalShape`, so it keeps the hidden score
 category used by stamina and stress rules. It overrides its click result to
 award zero points and overrides visibility so only its affected player can
-receive or claim it. Automatic hallucination generation will be connected to
-stress in Section 9.
+receive or claim it. Section 9 connects automatic hallucination generation to
+the affected player's stress level.
 
 ## Polymorphism
 
@@ -122,8 +122,7 @@ second shield: 10 seconds total
 The server stores the shield end time. The client only displays the remaining
 time and cannot decide whether a penalty is blocked.
 
-Shield clicks do not consume stamina. Their stress behavior will be completed
-with that system in Section 9.
+Shield clicks consume neither stamina nor stress.
 
 ## Ice behavior
 
@@ -134,8 +133,7 @@ authoritative protection.
 
 Repeated ice clicks add to the existing freeze end time.
 
-The requirement that stamina and stress remain fixed during a freeze will be
-connected when those player systems exist.
+Stamina and stress both remain fixed during a freeze.
 
 ## Per-player state messages
 

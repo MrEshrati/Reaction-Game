@@ -8,7 +8,7 @@ import unittest
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from client.game_client import create_client_state, handle_server_message
-from game.player import PlayerStamina
+from game.player import PlayerStamina, PlayerStress
 from game.shapes import NormalShape
 from server.game_server import (
     create_server_state,
@@ -34,6 +34,10 @@ def create_running_server_state():
     server_state["player_stamina"] = {
         1: PlayerStamina(),
         2: PlayerStamina(),
+    }
+    server_state["player_stress"] = {
+        1: PlayerStress(),
+        2: PlayerStress(),
     }
     server_state["match_running"] = True
     return server_state

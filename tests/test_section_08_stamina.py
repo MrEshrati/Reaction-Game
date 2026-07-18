@@ -12,7 +12,7 @@ from client.game_client import (
     handle_server_message,
     send_shape_click,
 )
-from game.player import PlayerStamina
+from game.player import PlayerStamina, PlayerStress
 from game.shapes import HallucinationShape, NormalShape, ShieldShape
 from server.game_server import (
     broadcast_shape_spawn,
@@ -38,6 +38,10 @@ def create_running_stamina_state(initial_stamina=100):
     server_state["player_stamina"] = {
         1: PlayerStamina(initial_stamina),
         2: PlayerStamina(initial_stamina),
+    }
+    server_state["player_stress"] = {
+        1: PlayerStress(),
+        2: PlayerStress(),
     }
     server_state["match_running"] = True
     return server_state

@@ -86,6 +86,7 @@ class Shape(ABC):
             "points": self._points,
             "effect": None,
             "stamina_cost": 5,
+            "stress_change": 0,
         }
 
     def get_spawn_data(self):
@@ -139,6 +140,19 @@ class NormalShape(Shape):
 
         return "high"
 
+    def get_click_result(self):
+        click_result = Shape.get_click_result(self)
+        score_category = self.get_score_category()
+
+        if score_category == "negative":
+            click_result["stress_change"] = 30
+        elif score_category == "low":
+            click_result["stress_change"] = 10
+        else:
+            click_result["stress_change"] = -5
+
+        return click_result
+
 
 class ShieldShape(Shape):
     def __init__(
@@ -175,6 +189,7 @@ class ShieldShape(Shape):
                 "duration": self._effect_duration,
             },
             "stamina_cost": 0,
+            "stress_change": 0,
         }
 
     def get_spawn_data(self):
@@ -218,6 +233,7 @@ class IceShape(Shape):
                 "duration": self._effect_duration,
             },
             "stamina_cost": 5,
+            "stress_change": 0,
         }
 
     def get_spawn_data(self):
@@ -307,6 +323,28 @@ def create_random_shape(
         y_position,
         radius,
         lifetime,
+    )
+
+
+# hallucinations look normal but are sent only to the stressed player
+def create_hallucination_shape(
+    shape_id,
+    screen_width,
+    screen_height,
+    lifetime,
+    visible_to_player,
+):
+    x_position = random.randint(60, screen_width - 60)
+    y_position = random.randint(120, screen_height - 60)
+    points = random.choice(NORMAL_POINTS)
+    return HallucinationShape(
+        shape_id,
+        x_position,
+        y_position,
+        30,
+        points,
+        lifetime,
+        visible_to_player,
     )
 
 
