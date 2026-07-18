@@ -128,6 +128,8 @@ class BasicPygameClientTest(unittest.TestCase):
         self.assertFalse(second_click)
         self.assertEqual(sent_message["type"], "click")
         self.assertEqual(sent_message["data"]["shape_id"], 11)
+        self.assertEqual(sent_message["data"]["x"], 100)
+        self.assertEqual(sent_message["data"]["y"], 100)
         self.assertEqual(client_state["scores"], {"1": 0, "2": 0})
 
     def test_expired_visual_shape_is_removed(self):

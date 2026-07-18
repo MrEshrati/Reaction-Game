@@ -35,9 +35,14 @@ try:
         print("Received:", message)
 
         if message["type"] == "shape_spawn":
+            shape_data = message["data"]
             click_message = create_message(
                 "click",
-                {"shape_id": message["data"]["shape_id"]},
+                {
+                    "shape_id": shape_data["shape_id"],
+                    "x": shape_data["x"],
+                    "y": shape_data["y"],
+                },
             )
             send_message(client_socket, click_message)
 except KeyboardInterrupt:

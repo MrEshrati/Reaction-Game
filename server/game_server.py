@@ -220,7 +220,7 @@ def apply_shape_effect(server_state, player_id, effect, current_time):
 
 
 # this is the authoritative and atomic check-and-change click operation
-def process_click(server_state, player_id, shape_id):
+def process_click(server_state, player_id, shape_id, click_position):
     with server_state["state_lock"]:
         if not server_state["match_running"]:
             return {
@@ -232,6 +232,38 @@ def process_click(server_state, player_id, shape_id):
             return {
                 "accepted": False,
                 "error": "The player is not connected.",
+            }
+
+        if type(shape_id) is not int:
+            return {
+                "accepted": False,
+                "error": "A click needs an integer shape_id.",
+            }
+
+        if not isinstance(click_position, (list, tuple)):
+            return {
+                "accepted": False,
+                "error": "A click needs an x and y position.",
+            }
+
+        if len(click_position) != 2:
+            return {
+                "accepted": False,
+                "error": "A click needs an x and y position.",
+            }
+
+        click_x, click_y = click_position
+
+        if type(click_x) is not int or type(click_y) is not int:
+            return {
+                "accepted": False,
+                "error": "Click coordinates must be integers.",
+            }
+
+        if not 0 <= click_x < SCREEN_WIDTH or not 0 <= click_y < SCREEN_HEIGHT:
+            return {
+                "accepted": False,
+                "error": "Click coordinates are outside the game window.",
             }
 
         current_time = time.monotonic()
@@ -262,6 +294,12 @@ def process_click(server_state, player_id, shape_id):
             return {
                 "accepted": False,
                 "error": "The shape has expired.",
+            }
+
+        if not shape.contains_point(click_x, click_y):
+            return {
+                "accepted": False,
+                "error": "The click did not hit the shape.",
             }
 
         click_result = shape.get_click_result()
@@ -305,9 +343,12 @@ def handle_client_message(server_state, client, message):
         safe_send(client, error_message)
         return
 
-    shape_id = message["data"].get("shape_id")
+    click_data = message["data"]
+    shape_id = click_data.get("shape_id")
+    click_x = click_data.get("x")
+    click_y = click_data.get("y")
 
-    if not isinstance(shape_id, int):
+    if type(shape_id) is not int:
         error_message = create_message(
             "error",
             {"message": "A click needs an integer shape_id."},
@@ -315,12 +356,31 @@ def handle_client_message(server_state, client, message):
         safe_send(client, error_message)
         return
 
-    result = process_click(server_state, client["player_id"], shape_id)
+    if type(click_x) is not int or type(click_y) is not int:
+        error_message = create_message(
+            "error",
+            {
+                "message": "Click coordinates must be integers.",
+                "shape_id": shape_id,
+            },
+        )
+        safe_send(client, error_message)
+        return
+
+    result = process_click(
+        server_state,
+        client["player_id"],
+        shape_id,
+        (click_x, click_y),
+    )
 
     if not result["accepted"]:
         error_message = create_message(
             "error",
-            {"message": result["error"]},
+            {
+                "message": result["error"],
+                "shape_id": shape_id,
+            },
         )
         safe_send(client, error_message)
         return

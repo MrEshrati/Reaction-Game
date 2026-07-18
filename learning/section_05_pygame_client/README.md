@@ -95,7 +95,9 @@ If this is true, the mouse is inside the circle. The client sends:
 {
   "type": "click",
   "data": {
-    "shape_id": 7
+    "shape_id": 7,
+    "x": 300,
+    "y": 250
   }
 }
 ```
@@ -103,6 +105,9 @@ If this is true, the mouse is inside the circle. The client sends:
 The client does not remove the shape or add points immediately. It waits for
 the server's `shape_remove` and `score_update` events. This preserves the
 authoritative design.
+
+Starting in Section 7, the server independently repeats the circle hit test
+using these coordinates instead of trusting the client's result.
 
 `pending_clicks` prevents the same client from sending many requests for one
 shape while waiting for the server response.

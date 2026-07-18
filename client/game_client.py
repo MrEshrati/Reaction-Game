@@ -200,6 +200,10 @@ def handle_server_message(client_state, message):
             "Unknown server error.",
         )
 
+        rejected_shape_id = message_data.get("shape_id")
+        if rejected_shape_id in client_state["pending_clicks"]:
+            client_state["pending_clicks"].remove(rejected_shape_id)
+
         if message_data.get("connection_closed"):
             client_state["screen_name"] = "disconnected"
 
@@ -277,7 +281,15 @@ def send_shape_click(client_state, mouse_position):
     if shape_id is None or shape_id in client_state["pending_clicks"]:
         return False
 
-    click_message = create_message("click", {"shape_id": shape_id})
+    mouse_x, mouse_y = mouse_position
+    click_message = create_message(
+        "click",
+        {
+            "shape_id": shape_id,
+            "x": mouse_x,
+            "y": mouse_y,
+        },
+    )
 
     try:
         send_message(client_state["connection"], click_message)

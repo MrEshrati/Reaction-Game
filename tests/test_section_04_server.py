@@ -70,7 +70,12 @@ class AuthoritativeServerTest(unittest.TestCase):
 
         def click_shape(player_id):
             start_event.wait()
-            result = process_click(server_state, player_id, shape_id)
+            result = process_click(
+                server_state,
+                player_id,
+                shape_id,
+                shape.get_position(),
+            )
             results.put(result)
 
         player_one_thread = threading.Thread(target=click_shape, args=(1,))
@@ -137,7 +142,12 @@ class AuthoritativeServerTest(unittest.TestCase):
         shape = NormalShape(1, 200, 200, 30, 3, 1, created_at=0)
         server_state["active_shapes"][shape.get_id()] = shape
 
-        result = process_click(server_state, 1, shape.get_id())
+        result = process_click(
+            server_state,
+            1,
+            shape.get_id(),
+            shape.get_position(),
+        )
 
         self.assertFalse(result["accepted"])
         self.assertEqual(server_state["scores"][1], 0)

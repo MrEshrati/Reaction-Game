@@ -91,11 +91,11 @@ class ShapeHierarchyTest(unittest.TestCase):
             3: negative_shape,
         }
 
-        process_click(server_state, 1, 1)
+        process_click(server_state, 1, 1, (100, 100))
         first_end_time = server_state["player_effects"][1]["shield_until"]
-        process_click(server_state, 1, 2)
+        process_click(server_state, 1, 2, (100, 100))
         second_end_time = server_state["player_effects"][1]["shield_until"]
-        negative_result = process_click(server_state, 1, 3)
+        negative_result = process_click(server_state, 1, 3, (100, 100))
 
         self.assertGreaterEqual(second_end_time - first_end_time, 4.9)
         self.assertTrue(negative_result["shield_blocked_penalty"])
@@ -113,11 +113,11 @@ class ShapeHierarchyTest(unittest.TestCase):
             3: normal_shape,
         }
 
-        process_click(server_state, 1, 1)
+        process_click(server_state, 1, 1, (100, 100))
         first_end_time = server_state["player_effects"][2]["frozen_until"]
-        process_click(server_state, 1, 2)
+        process_click(server_state, 1, 2, (100, 100))
         second_end_time = server_state["player_effects"][2]["frozen_until"]
-        frozen_result = process_click(server_state, 2, 3)
+        frozen_result = process_click(server_state, 2, 3, (100, 100))
 
         self.assertGreaterEqual(second_end_time - first_end_time, 2.9)
         self.assertFalse(frozen_result["accepted"])
@@ -154,7 +154,7 @@ class ShapeHierarchyTest(unittest.TestCase):
         shape = HallucinationShape(1, 200, 200, 30, 4, 2, 1)
         server_state["active_shapes"][1] = shape
 
-        result = process_click(server_state, 2, 1)
+        result = process_click(server_state, 2, 1, (200, 200))
 
         self.assertFalse(result["accepted"])
         self.assertIn(1, server_state["active_shapes"])

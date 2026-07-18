@@ -74,6 +74,13 @@ class Shape(ABC):
     def is_visible_to(self, player_id):
         return True
 
+    def contains_point(self, x_position, y_position):
+        x_distance = x_position - self._x_position
+        y_distance = y_position - self._y_position
+        distance_squared = x_distance * x_distance + y_distance * y_distance
+        radius_squared = self._radius * self._radius
+        return distance_squared <= radius_squared
+
     def get_click_result(self):
         return {
             "points": self._points,
