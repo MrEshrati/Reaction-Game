@@ -8,6 +8,9 @@ import time
 import pygame
 
 from game.shapes import shape_from_message
+from shared.match_settings import DEFAULT_MATCH_DURATION
+from shared.match_settings import MAX_MATCH_DURATION, MIN_MATCH_DURATION
+from shared.match_settings import is_valid_match_duration
 from shared.protocol import create_message, send_message
 from shared.threading_tools import receive_messages
 
@@ -35,8 +38,9 @@ BUTTON_COLOR = (44, 126, 224)
 BUTTON_HOVER_COLOR = (75, 154, 245)
 INPUT_COLOR = (40, 50, 72)
 
-CONNECT_BUTTON = pygame.Rect(280, 370, 240, 55)
-NAME_INPUT_BOX = pygame.Rect(220, 285, 360, 58)
+CONNECT_BUTTON = pygame.Rect(280, 420, 240, 55)
+NAME_INPUT_BOX = pygame.Rect(220, 235, 360, 52)
+DURATION_INPUT_BOX = pygame.Rect(220, 330, 360, 52)
 MOUSE_CALIBRATION_DURATION = 2
 MOUSE_JUMP_INTERVAL = 3
 MOUSE_TRAIL_LENGTH = 8
@@ -48,8 +52,12 @@ def create_client_state():
         "running": True,
         "screen_name": "connect",
         "name_input": "",
+        "duration_input": str(DEFAULT_MATCH_DURATION),
+        "active_input": "name",
         "player_name": "",
         "player_id": None,
+        "is_host": False,
+        "match_duration": DEFAULT_MATCH_DURATION,
         "connection": None,
         "network_thread": None,
         "incoming_messages": queue.Queue(),
@@ -61,7 +69,7 @@ def create_client_state():
         "match_end_time": None,
         "winner": None,
         "game_over_reason": "",
-        "status_message": "Enter your name and connect to the server.",
+        "status_message": "Enter your name and choose a match time.",
         "virtual_mouse_position": [SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2],
         "last_system_mouse_position": None,
         "mouse_calibration_end_time": None,
@@ -85,6 +93,21 @@ def connect_to_server(
         client_state["status_message"] = "Please enter a player name."
         return False
 
+    try:
+        match_duration = int(client_state["duration_input"])
+    except ValueError:
+        match_duration = None
+
+    if not is_valid_match_duration(match_duration):
+        client_state["status_message"] = (
+            "Match time must be "
+            + str(MIN_MATCH_DURATION)
+            + " to "
+            + str(MAX_MATCH_DURATION)
+            + " seconds."
+        )
+        return False
+
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.settimeout(3)
 
@@ -92,7 +115,13 @@ def connect_to_server(
         client_socket.connect((host, port))
         client_socket.settimeout(None)
 
-        join_message = create_message("join", {"name": player_name})
+        join_message = create_message(
+            "join",
+            {
+                "name": player_name,
+                "duration": match_duration,
+            },
+        )
         send_message(client_socket, join_message)
 
         client_state["connection"] = client_socket
@@ -140,6 +169,11 @@ def handle_server_message(client_state, message):
 
     if message_type == "welcome":
         client_state["player_id"] = message_data["player_id"]
+        client_state["is_host"] = message_data.get("is_host", False)
+        client_state["match_duration"] = message_data.get(
+            "match_duration",
+            DEFAULT_MATCH_DURATION,
+        )
         client_state["screen_name"] = "waiting"
         waiting_count = message_data.get("waiting_for_players", 0)
 
@@ -490,19 +524,34 @@ def draw_connect_screen(surface, fonts, client_state):
         "REACTION GAME",
         fonts["title"],
         TEXT_COLOR,
-        120,
+        90,
     )
     draw_centered_text(
         surface,
         "Two players. One shared board. Click first.",
         fonts["normal"],
         SECONDARY_TEXT_COLOR,
-        175,
+        150,
     )
 
-    input_color = INPUT_COLOR
-    pygame.draw.rect(surface, input_color, NAME_INPUT_BOX, border_radius=10)
-    pygame.draw.rect(surface, ACCENT_COLOR, NAME_INPUT_BOX, 2, border_radius=10)
+    draw_centered_text(
+        surface,
+        "PLAYER NAME",
+        fonts["small"],
+        SECONDARY_TEXT_COLOR,
+        215,
+    )
+    pygame.draw.rect(surface, INPUT_COLOR, NAME_INPUT_BOX, border_radius=10)
+    name_border_color = SECONDARY_TEXT_COLOR
+    if client_state["active_input"] == "name":
+        name_border_color = ACCENT_COLOR
+    pygame.draw.rect(
+        surface,
+        name_border_color,
+        NAME_INPUT_BOX,
+        2,
+        border_radius=10,
+    )
 
     if client_state["name_input"]:
         input_text = client_state["name_input"]
@@ -512,7 +561,38 @@ def draw_connect_screen(surface, fonts, client_state):
         text_color = SECONDARY_TEXT_COLOR
 
     rendered_input = fonts["normal"].render(input_text, True, text_color)
-    surface.blit(rendered_input, (NAME_INPUT_BOX.x + 18, NAME_INPUT_BOX.y + 15))
+    surface.blit(rendered_input, (NAME_INPUT_BOX.x + 18, NAME_INPUT_BOX.y + 12))
+
+    duration_label = "MATCH TIME ("
+    duration_label += str(MIN_MATCH_DURATION) + "-" + str(MAX_MATCH_DURATION)
+    duration_label += " SECONDS; FIRST PLAYER HOSTS)"
+    draw_centered_text(
+        surface,
+        duration_label,
+        fonts["small"],
+        SECONDARY_TEXT_COLOR,
+        310,
+    )
+    pygame.draw.rect(surface, INPUT_COLOR, DURATION_INPUT_BOX, border_radius=10)
+    duration_border_color = SECONDARY_TEXT_COLOR
+    if client_state["active_input"] == "duration":
+        duration_border_color = ACCENT_COLOR
+    pygame.draw.rect(
+        surface,
+        duration_border_color,
+        DURATION_INPUT_BOX,
+        2,
+        border_radius=10,
+    )
+    rendered_duration = fonts["normal"].render(
+        client_state["duration_input"],
+        True,
+        TEXT_COLOR,
+    )
+    surface.blit(
+        rendered_duration,
+        (DURATION_INPUT_BOX.x + 18, DURATION_INPUT_BOX.y + 12),
+    )
 
     mouse_position = pygame.mouse.get_pos()
     if CONNECT_BUTTON.collidepoint(mouse_position):
@@ -533,7 +613,7 @@ def draw_connect_screen(surface, fonts, client_state):
         client_state["status_message"],
         fonts["small"],
         SECONDARY_TEXT_COLOR,
-        480,
+        525,
     )
 
 
@@ -560,12 +640,24 @@ def draw_waiting_screen(surface, fonts, client_state):
         SECONDARY_TEXT_COLOR,
         315,
     )
+    if client_state["is_host"]:
+        duration_text = "You are the host. Match time: "
+    else:
+        duration_text = "Host-selected match time: "
+    duration_text += str(client_state["match_duration"]) + " seconds"
+    draw_centered_text(
+        surface,
+        duration_text,
+        fonts["normal"],
+        ACCENT_COLOR,
+        365,
+    )
     draw_centered_text(
         surface,
         "The match starts automatically when player two joins.",
         fonts["small"],
         SECONDARY_TEXT_COLOR,
-        365,
+        415,
     )
 
 
@@ -802,6 +894,17 @@ def draw_final_screen(surface, fonts, client_state):
         TEXT_COLOR,
         300,
     )
+    if client_state["game_over_reason"] == "player_disconnected":
+        finish_text = "The other player disconnected."
+    else:
+        finish_text = "The host-selected timer finished."
+    draw_centered_text(
+        surface,
+        finish_text,
+        fonts["normal"],
+        SECONDARY_TEXT_COLOR,
+        350,
+    )
     draw_centered_text(
         surface,
         "Close this window and restart the server for another match.",
@@ -864,14 +967,28 @@ def handle_pygame_event(event, client_state):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_RETURN:
                 connect_to_server(client_state)
+            elif event.key == pygame.K_TAB:
+                if client_state["active_input"] == "name":
+                    client_state["active_input"] = "duration"
+                else:
+                    client_state["active_input"] = "name"
             elif event.key == pygame.K_BACKSPACE:
-                client_state["name_input"] = client_state["name_input"][:-1]
+                input_name = client_state["active_input"] + "_input"
+                client_state[input_name] = client_state[input_name][:-1]
+            elif client_state["active_input"] == "duration":
+                if event.unicode.isdigit():
+                    if len(client_state["duration_input"]) < 3:
+                        client_state["duration_input"] += event.unicode
             elif len(client_state["name_input"]) < 20:
                 if event.unicode.isprintable():
                     client_state["name_input"] += event.unicode
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if CONNECT_BUTTON.collidepoint(event.pos):
+            if NAME_INPUT_BOX.collidepoint(event.pos):
+                client_state["active_input"] = "name"
+            elif DURATION_INPUT_BOX.collidepoint(event.pos):
+                client_state["active_input"] = "duration"
+            elif CONNECT_BUTTON.collidepoint(event.pos):
                 connect_to_server(client_state)
 
     elif client_state["screen_name"] == "game":

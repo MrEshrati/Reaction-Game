@@ -2,6 +2,7 @@ import queue
 import socket
 import threading
 
+from shared.match_settings import DEFAULT_MATCH_DURATION
 from shared.protocol import create_message, send_message
 from shared.threading_tools import receive_messages
 
@@ -17,7 +18,13 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 try:
     client_socket.connect((HOST, PORT))
-    join_message = create_message("join", {"name": player_name})
+    join_message = create_message(
+        "join",
+        {
+            "name": player_name,
+            "duration": DEFAULT_MATCH_DURATION,
+        },
+    )
     send_message(client_socket, join_message)
 
     network_thread = threading.Thread(

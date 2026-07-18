@@ -15,7 +15,7 @@ two-player reaction game with a Pygame client.
 - [x] Section 7: Click validation and race-condition protection
 - [x] Section 8: Stamina system
 - [x] Section 9: Stress system
-- [ ] Section 10: Game completion and reliability
+- [x] Section 10: Game completion and reliability
 - [ ] Section 11: Testing and cleanup
 
 The learning examples for each completed section are kept under `learning/`.

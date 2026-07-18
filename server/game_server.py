@@ -6,6 +6,7 @@ import time
 from game.player import PlayerStamina, PlayerStress
 from game.shapes import create_hallucination_shape
 from game.shapes import create_random_shape as create_shape_object
+from shared.match_settings import is_valid_match_duration
 from shared.protocol import create_message, receive_message, send_message
 
 
@@ -17,6 +18,7 @@ LOW_STAMINA_HIDE_CHANCE = 0.5
 STAMINA_UPDATE_INTERVAL = 0.1
 EMPTY_CLICK_STRESS = 5
 HALLUCINATION_CHECK_INTERVAL = 3
+SERVER_ACCEPT_TIMEOUT = 0.2
 
 
 # this function creates all shared server state in one place
@@ -41,6 +43,8 @@ def create_server_state(
         "shape_lifetime": shape_lifetime,
         "match_started": False,
         "match_running": False,
+        "match_end_time": None,
+        "player_disconnected_early": False,
         "state_lock": threading.Lock(),
         "match_stop_event": threading.Event(),
         "server_stop_event": threading.Event(),
@@ -235,8 +239,14 @@ def broadcast_shape_spawn(server_state, shape):
         remove_client(server_state, player_id)
 
 
-# a match accepts exactly two players and no late joins
-def register_client(server_state, connection, address, player_name):
+# the first player is the host and chooses the authoritative match duration
+def register_client(
+    server_state,
+    connection,
+    address,
+    player_name,
+    requested_duration=None,
+):
     with server_state["state_lock"]:
         if server_state["match_started"]:
             return None
@@ -244,12 +254,17 @@ def register_client(server_state, connection, address, player_name):
         if len(server_state["clients"]) >= 2:
             return None
 
+        is_host = len(server_state["clients"]) == 0
         player_id = server_state["next_player_id"]
         server_state["next_player_id"] += 1
+
+        if is_host and requested_duration is not None:
+            server_state["match_duration"] = requested_duration
 
         client = {
             "player_id": player_id,
             "name": player_name,
+            "is_host": is_host,
             "connection": connection,
             "address": address,
             "send_lock": threading.Lock(),
@@ -274,8 +289,21 @@ def remove_client(server_state, player_id):
     with server_state["state_lock"]:
         client = server_state["clients"].pop(player_id, None)
 
-        if client is not None and server_state["match_running"]:
+        if client is not None and server_state["match_started"]:
+            match_end_time = server_state["match_end_time"]
+            if match_end_time is None or time.monotonic() < match_end_time:
+                server_state["player_disconnected_early"] = True
             server_state["match_stop_event"].set()
+
+        if client is not None and not server_state["match_started"]:
+            server_state["scores"].pop(player_id, None)
+            server_state["player_effects"].pop(player_id, None)
+            server_state["player_stamina"].pop(player_id, None)
+            server_state["player_stress"].pop(player_id, None)
+            server_state["next_hallucination_times"].pop(player_id, None)
+
+            if not server_state["clients"]:
+                server_state["next_player_id"] = 1
 
     if client is not None:
         try:
@@ -713,12 +741,12 @@ def handle_client_message(server_state, client, message):
 
 
 # the winner is decided from server scores after the match finishes
-def find_winner(server_state):
+def find_winner(server_state, player_disconnected=False):
     connected_player_ids = []
     for player_id in server_state["clients"]:
         connected_player_ids.append(player_id)
 
-    if len(connected_player_ids) == 1:
+    if player_disconnected and len(connected_player_ids) == 1:
         return connected_player_ids[0]
 
     highest_score = None
@@ -741,13 +769,30 @@ def find_winner(server_state):
 def run_match(server_state):
     with server_state["state_lock"]:
         if len(server_state["clients"]) != 2:
-            return
+            winner = find_winner(server_state, player_disconnected=True)
+            final_scores = copy_scores_for_message(server_state)
+            game_can_start = False
+        else:
+            server_state["match_running"] = True
+            match_duration = server_state["match_duration"]
+            match_end_time = time.monotonic() + match_duration
+            server_state["match_end_time"] = match_end_time
+            server_state["player_disconnected_early"] = False
+            starting_scores = copy_scores_for_message(server_state)
+            starting_player_states = copy_player_effects_for_message(server_state)
+            game_can_start = True
 
-        server_state["match_running"] = True
-        match_duration = server_state["match_duration"]
-        match_end_time = time.monotonic() + match_duration
-        starting_scores = copy_scores_for_message(server_state)
-        starting_player_states = copy_player_effects_for_message(server_state)
+    if not game_can_start:
+        game_over_message = create_message(
+            "game_over",
+            {
+                "winner": winner,
+                "scores": final_scores,
+                "reason": "player_disconnected",
+            },
+        )
+        broadcast_message(server_state, game_over_message)
+        return
 
     start_message = create_message(
         "game_start",
@@ -799,11 +844,11 @@ def run_match(server_state):
                 spawn_due_hallucinations(server_state)
 
     with server_state["state_lock"]:
-        disconnected_early = server_state["match_stop_event"].is_set()
+        disconnected_early = server_state["player_disconnected_early"]
         server_state["match_running"] = False
         server_state["active_shapes"].clear()
         server_state["shape_visibility"].clear()
-        winner = find_winner(server_state)
+        winner = find_winner(server_state, disconnected_early)
         final_scores = copy_scores_for_message(server_state)
 
     if disconnected_early:
@@ -825,7 +870,6 @@ def run_match(server_state):
 # the second successful registration starts exactly one match thread
 def start_match_if_ready(server_state):
     with server_state["state_lock"]:
-        
         if len(server_state["clients"]) != 2 or server_state["match_started"]:
             return None
 
@@ -854,6 +898,7 @@ def handle_client(server_state, connection, address):
             return
 
         player_name = str(first_message["data"].get("name", "")).strip()
+        requested_duration = first_message["data"].get("duration")
 
         if not player_name:
             error_message = create_message(
@@ -863,11 +908,25 @@ def handle_client(server_state, connection, address):
             send_message(connection, error_message)
             return
 
+        if not is_valid_match_duration(requested_duration):
+            error_message = create_message(
+                "error",
+                {
+                    "message": (
+                        "Match duration must be a whole number "
+                        "between 10 and 300 seconds."
+                    ),
+                },
+            )
+            send_message(connection, error_message)
+            return
+
         player_id = register_client(
             server_state,
             connection,
             address,
             player_name,
+            requested_duration,
         )
 
         if player_id is None:
@@ -881,6 +940,7 @@ def handle_client(server_state, connection, address):
         with server_state["state_lock"]:
             client = server_state["clients"][player_id]
             waiting_for_players = 2 - len(server_state["clients"])
+            match_duration = server_state["match_duration"]
 
         welcome_message = create_message(
             "welcome",
@@ -888,6 +948,8 @@ def handle_client(server_state, connection, address):
                 "player_id": player_id,
                 "name": player_name,
                 "waiting_for_players": waiting_for_players,
+                "is_host": client["is_host"],
+                "match_duration": match_duration,
             },
         )
         safe_send(client, welcome_message)
@@ -918,12 +980,18 @@ def run_server(server_state, host=SERVER_HOST, port=SERVER_PORT):
     listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listening_socket.bind((host, port))
     listening_socket.listen()
+    listening_socket.settimeout(SERVER_ACCEPT_TIMEOUT)
 
-    print(f"Game server listening on {host}:{port}")
+    actual_port = listening_socket.getsockname()[1]
+    print(f"Game server listening on {host}:{actual_port}")
 
     try:
         while not server_state["server_stop_event"].is_set():
-            connection, address = listening_socket.accept()
+            try:
+                connection, address = listening_socket.accept()
+            except socket.timeout:
+                continue
+
             client_thread = threading.Thread(
                 target=handle_client,
                 args=(server_state, connection, address),
