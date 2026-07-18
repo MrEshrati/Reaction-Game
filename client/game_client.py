@@ -436,12 +436,14 @@ def send_shape_click(client_state, mouse_position):
         client_state["status_message"] = "You are frozen and cannot click."
         return False
 
-    shape_id = find_clicked_shape(client_state, mouse_position)
+    mouse_x = round(mouse_position[0])
+    mouse_y = round(mouse_position[1])
+    click_position = (mouse_x, mouse_y)
+    shape_id = find_clicked_shape(client_state, click_position)
 
     if shape_id in client_state["pending_clicks"]:
         return False
 
-    mouse_x, mouse_y = mouse_position
     click_message = create_message(
         "click",
         {

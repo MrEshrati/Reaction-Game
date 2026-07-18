@@ -212,7 +212,7 @@ class StressSystemTest(unittest.TestCase):
         client_state["connection"] = connection
         client_state["player_id"] = 1
         client_state["screen_name"] = "game"
-        client_state["virtual_mouse_position"] = [700, 500]
+        client_state["virtual_mouse_position"] = [700.4, 499.6]
         client_state["player_states"] = {
             "1": {
                 "shield_until": 0,
@@ -221,6 +221,19 @@ class StressSystemTest(unittest.TestCase):
                 "stress": 0,
             }
         }
+        shape_message = {
+            "type": "shape_spawn",
+            "data": {
+                "shape_id": 9,
+                "shape_type": "normal",
+                "x": 700,
+                "y": 500,
+                "radius": 30,
+                "points": 4,
+                "lifetime": 2,
+            },
+        }
+        handle_server_message(client_state, shape_message)
         mouse_event = pygame.event.Event(
             pygame.MOUSEBUTTONDOWN,
             {"button": 1, "pos": (10, 10)},
@@ -229,6 +242,7 @@ class StressSystemTest(unittest.TestCase):
         handle_pygame_event(mouse_event, client_state)
         sent_message = receive_message(connection)
 
+        self.assertEqual(sent_message["data"]["shape_id"], 9)
         self.assertEqual(sent_message["data"]["x"], 700)
         self.assertEqual(sent_message["data"]["y"], 500)
 
