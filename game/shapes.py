@@ -85,6 +85,7 @@ class Shape(ABC):
         return {
             "points": self._points,
             "effect": None,
+            "stamina_cost": 5,
         }
 
     def get_spawn_data(self):
@@ -173,6 +174,7 @@ class ShieldShape(Shape):
                 "type": "shield",
                 "duration": self._effect_duration,
             },
+            "stamina_cost": 0,
         }
 
     def get_spawn_data(self):
@@ -215,6 +217,7 @@ class IceShape(Shape):
                 "type": "ice",
                 "duration": self._effect_duration,
             },
+            "stamina_cost": 5,
         }
 
     def get_spawn_data(self):
@@ -254,6 +257,11 @@ class HallucinationShape(NormalShape):
 
     def is_visible_to(self, player_id):
         return player_id == self._visible_to_player
+
+    def get_click_result(self):
+        click_result = NormalShape.get_click_result(self)
+        click_result["points"] = 0
+        return click_result
 
     def get_spawn_data(self):
         spawn_data = NormalShape.get_spawn_data(self)

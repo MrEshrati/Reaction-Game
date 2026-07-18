@@ -8,6 +8,7 @@ import unittest
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from client.game_client import create_client_state, handle_server_message
+from game.player import PlayerStamina
 from game.shapes import NormalShape
 from server.game_server import (
     create_server_state,
@@ -29,6 +30,10 @@ def create_running_server_state():
     server_state["player_effects"] = {
         1: {"shield_until": 0, "frozen_until": 0},
         2: {"shield_until": 0, "frozen_until": 0},
+    }
+    server_state["player_stamina"] = {
+        1: PlayerStamina(),
+        2: PlayerStamina(),
     }
     server_state["match_running"] = True
     return server_state
@@ -153,6 +158,10 @@ class ClickValidationTest(unittest.TestCase):
 
     def test_repeated_simultaneous_clicks_have_one_winner_each(self):
         server_state = create_running_server_state()
+        server_state["player_stamina"] = {
+            1: PlayerStamina(60),
+            2: PlayerStamina(60),
+        }
         round_count = 20
         shape_id = 1
 

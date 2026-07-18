@@ -26,6 +26,8 @@ POSITIVE_COLOR = (63, 196, 112)
 NEGATIVE_COLOR = (235, 83, 83)
 SHIELD_COLOR = (58, 128, 246)
 ICE_COLOR = (85, 210, 230)
+STAMINA_COLOR = (245, 190, 65)
+STAMINA_BACKGROUND_COLOR = (53, 63, 82)
 BUTTON_COLOR = (44, 126, 224)
 BUTTON_HOVER_COLOR = (75, 154, 245)
 INPUT_COLOR = (40, 50, 72)
@@ -176,6 +178,11 @@ def handle_server_message(client_state, message):
 
     elif message_type == "player_state":
         current_time = time.monotonic()
+        previous_local_state = client_state["player_states"].get(
+            str(client_state["player_id"]),
+            {},
+        )
+        previous_stamina = previous_local_state.get("stamina", 100)
         client_state["player_states"] = {}
 
         for player_id, player_state in message_data.get("players", {}).items():
@@ -184,7 +191,18 @@ def handle_server_message(client_state, message):
                 + player_state.get("shield_seconds", 0),
                 "frozen_until": current_time
                 + player_state.get("frozen_seconds", 0),
+                "stamina": player_state.get("stamina", 100),
             }
+
+        local_player_id = str(client_state["player_id"])
+        local_player_state = client_state["player_states"].get(
+            local_player_id,
+            {},
+        )
+        current_stamina = local_player_state.get("stamina", 100)
+
+        if previous_stamina <= 10 and current_stamina > 10:
+            client_state["status_message"] = "Stamina recovered. You can play again."
 
     elif message_type == "game_over":
         client_state["screen_name"] = "final"
@@ -265,12 +283,25 @@ def get_local_player_effects(client_state, current_time=None):
     return {
         "shield_seconds": shield_seconds,
         "frozen_seconds": frozen_seconds,
+        "stamina": player_state.get("stamina", 100),
     }
+
+
+def get_stamina_darkness(stamina_value):
+    if stamina_value < 40 or stamina_value >= 60:
+        return 0
+
+    darkness_progress = (60 - stamina_value) / 20
+    return int(darkness_progress * 140)
 
 
 # a click is only a request; the client never changes its own score
 def send_shape_click(client_state, mouse_position):
     player_effects = get_local_player_effects(client_state)
+
+    if player_effects["stamina"] <= 10:
+        client_state["status_message"] = "Stamina depleted. Wait for recovery."
+        return False
 
     if player_effects["frozen_seconds"] > 0:
         client_state["status_message"] = "You are frozen and cannot click."
@@ -439,6 +470,34 @@ def draw_game_screen(surface, fonts, client_state):
 
     player_effects = get_local_player_effects(client_state)
     effect_parts = []
+    stamina_value = player_effects["stamina"]
+
+    stamina_label = fonts["small"].render(
+        "STAMINA " + str(round(stamina_value)) + "%",
+        True,
+        STAMINA_COLOR,
+    )
+    surface.blit(stamina_label, (28, 65))
+    stamina_bar_background = pygame.Rect(145, 70, 110, 10)
+    pygame.draw.rect(
+        surface,
+        STAMINA_BACKGROUND_COLOR,
+        stamina_bar_background,
+        border_radius=5,
+    )
+    stamina_width = round(stamina_bar_background.width * stamina_value / 100)
+    stamina_bar = pygame.Rect(
+        stamina_bar_background.x,
+        stamina_bar_background.y,
+        stamina_width,
+        stamina_bar_background.height,
+    )
+    pygame.draw.rect(
+        surface,
+        STAMINA_COLOR,
+        stamina_bar,
+        border_radius=5,
+    )
 
     if player_effects["shield_seconds"] > 0:
         shield_time = math.ceil(player_effects["shield_seconds"])
@@ -489,6 +548,15 @@ def draw_game_screen(surface, fonts, client_state):
         )
         points_rectangle = points_text.get_rect(center=center)
         surface.blit(points_text, points_rectangle)
+
+    darkness = get_stamina_darkness(stamina_value)
+    if darkness > 0:
+        dark_overlay = pygame.Surface(
+            (SCREEN_WIDTH, SCREEN_HEIGHT - 92),
+            pygame.SRCALPHA,
+        )
+        dark_overlay.fill((0, 0, 0, darkness))
+        surface.blit(dark_overlay, (0, 92))
 
     status_bar = pygame.Rect(20, SCREEN_HEIGHT - 52, SCREEN_WIDTH - 40, 34)
     pygame.draw.rect(surface, PANEL_COLOR, status_bar, border_radius=8)

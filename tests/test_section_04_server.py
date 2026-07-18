@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 
+from game.player import PlayerStamina
 from game.shapes import NormalShape
 from server.game_server import (
     create_random_shape,
@@ -61,6 +62,10 @@ class AuthoritativeServerTest(unittest.TestCase):
         server_state["player_effects"] = {
             1: {"shield_until": 0, "frozen_until": 0},
             2: {"shield_until": 0, "frozen_until": 0},
+        }
+        server_state["player_stamina"] = {
+            1: PlayerStamina(60),
+            2: PlayerStamina(60),
         }
         server_state["match_running"] = True
         shape = create_random_shape(server_state)
@@ -138,6 +143,7 @@ class AuthoritativeServerTest(unittest.TestCase):
         server_state["player_effects"] = {
             1: {"shield_until": 0, "frozen_until": 0},
         }
+        server_state["player_stamina"] = {1: PlayerStamina()}
         server_state["match_running"] = True
         shape = NormalShape(1, 200, 200, 30, 3, 1, created_at=0)
         server_state["active_shapes"][shape.get_id()] = shape

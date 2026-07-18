@@ -13,7 +13,7 @@ two-player reaction game with a Pygame client.
 - [x] Section 5: Basic Pygame client
 - [x] Section 6: Object-oriented shape system
 - [x] Section 7: Click validation and race-condition protection
-- [ ] Section 8: Stamina system
+- [x] Section 8: Stamina system
 - [ ] Section 9: Stress system
 - [ ] Section 10: Game completion and reliability
 - [ ] Section 11: Testing and cleanup

@@ -1,6 +1,7 @@
 import socket
 import unittest
 
+from game.player import PlayerStamina
 from game.shapes import (
     HallucinationShape,
     IceShape,
@@ -29,6 +30,10 @@ def create_two_player_state():
     server_state["player_effects"] = {
         1: {"shield_until": 0, "frozen_until": 0},
         2: {"shield_until": 0, "frozen_until": 0},
+    }
+    server_state["player_stamina"] = {
+        1: PlayerStamina(),
+        2: PlayerStamina(),
     }
     server_state["match_running"] = True
     return server_state

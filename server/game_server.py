@@ -1,7 +1,9 @@
+import random
 import socket
 import threading
 import time
 
+from game.player import PlayerStamina
 from game.shapes import create_random_shape as create_shape_object
 from shared.protocol import create_message, receive_message, send_message
 
@@ -10,6 +12,8 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 5050
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
+LOW_STAMINA_HIDE_CHANCE = 0.5
+STAMINA_UPDATE_INTERVAL = 0.1
 
 
 # this function creates all shared server state in one place
@@ -22,7 +26,9 @@ def create_server_state(
         "clients": {},
         "scores": {},
         "player_effects": {},
+        "player_stamina": {},
         "active_shapes": {},
+        "shape_visibility": {},
         "next_player_id": 1,
         "next_shape_id": 1,
         "match_duration": match_duration,
@@ -48,7 +54,7 @@ def copy_scores_for_message(server_state):
     return message_scores
 
 
-# effect end times stay private on the server; clients receive remaining time
+# private effect times and stamina objects become simple client state values
 def copy_player_effects_for_message(server_state, current_time=None):
     if current_time is None:
         current_time = time.monotonic()
@@ -58,9 +64,15 @@ def copy_player_effects_for_message(server_state, current_time=None):
     for player_id, effects in server_state["player_effects"].items():
         shield_seconds = max(0, effects["shield_until"] - current_time)
         frozen_seconds = max(0, effects["frozen_until"] - current_time)
+        stamina = server_state["player_stamina"][player_id]
+        stamina_value = stamina.get_value(
+            current_time,
+            effects["frozen_until"],
+        )
         message_effects[str(player_id)] = {
             "shield_seconds": shield_seconds,
             "frozen_seconds": frozen_seconds,
+            "stamina": stamina_value,
         }
 
     return message_effects
@@ -93,20 +105,69 @@ def broadcast_message(server_state, message):
         remove_client(server_state, player_id)
 
 
+# recovery is calculated on the server and sent only when a value changes
+def broadcast_stamina_if_changed(server_state):
+    current_time = time.monotonic()
+
+    with server_state["state_lock"]:
+        stamina_changed = False
+
+        for player_id, stamina in server_state["player_stamina"].items():
+            frozen_until = server_state["player_effects"][player_id][
+                "frozen_until"
+            ]
+            if stamina.update(current_time, frozen_until):
+                stamina_changed = True
+
+        if not stamina_changed:
+            return False
+
+        player_states = copy_player_effects_for_message(
+            server_state,
+            current_time,
+        )
+
+    player_state_message = create_message(
+        "player_state",
+        {"players": player_states},
+    )
+    broadcast_message(server_state, player_state_message)
+    return True
+
+
 # hallucinations can use this function to target only their affected player
 def broadcast_shape_spawn(server_state, shape):
     with server_state["state_lock"]:
         clients = []
+        visible_player_ids = set()
+        current_time = time.monotonic()
+
         for client in server_state["clients"].values():
+            player_id = client["player_id"]
+
+            if not shape.is_visible_to(player_id):
+                continue
+
+            effects = server_state["player_effects"][player_id]
+            stamina = server_state["player_stamina"][player_id]
+            stamina_level = stamina.get_level(
+                current_time,
+                effects["frozen_until"],
+            )
+
+            if stamina_level == "limited_visibility":
+                if random.random() < LOW_STAMINA_HIDE_CHANCE:
+                    continue
+
             clients.append(client)
+            visible_player_ids.add(player_id)
+
+        server_state["shape_visibility"][shape.get_id()] = visible_player_ids
 
     shape_message = create_message("shape_spawn", shape.get_spawn_data())
     disconnected_players = []
 
     for client in clients:
-        if not shape.is_visible_to(client["player_id"]):
-            continue
-
         if not safe_send(client, shape_message):
             disconnected_players.append(client["player_id"])
 
@@ -140,6 +201,7 @@ def register_client(server_state, connection, address, player_name):
             "shield_until": 0,
             "frozen_until": 0,
         }
+        server_state["player_stamina"][player_id] = PlayerStamina()
         return player_id
 
 
@@ -186,6 +248,7 @@ def remove_expired_shapes(server_state):
 
         for shape_id in expired_shape_ids:
             del server_state["active_shapes"][shape_id]
+            server_state["shape_visibility"].pop(shape_id, None)
 
     return expired_shape_ids
 
@@ -213,6 +276,8 @@ def apply_shape_effect(server_state, player_id, effect, current_time):
             current_end_time = server_state["player_effects"][opponent_id][
                 "frozen_until"
             ]
+            opponent_stamina = server_state["player_stamina"][opponent_id]
+            opponent_stamina.update(current_time, current_end_time)
             start_time = max(current_time, current_end_time)
             server_state["player_effects"][opponent_id]["frozen_until"] = (
                 start_time + effect_duration
@@ -268,11 +333,21 @@ def process_click(server_state, player_id, shape_id, click_position):
 
         current_time = time.monotonic()
         player_effects = server_state["player_effects"][player_id]
+        player_stamina = server_state["player_stamina"][player_id]
 
         if current_time < player_effects["frozen_until"]:
             return {
                 "accepted": False,
                 "error": "The player is frozen.",
+            }
+
+        if not player_stamina.can_play(
+            current_time,
+            player_effects["frozen_until"],
+        ):
+            return {
+                "accepted": False,
+                "error": "The player's stamina is too low.",
             }
 
         shape = server_state["active_shapes"].get(shape_id)
@@ -289,8 +364,16 @@ def process_click(server_state, player_id, shape_id, click_position):
                 "error": "The shape is not available to this player.",
             }
 
+        visible_player_ids = server_state["shape_visibility"].get(shape_id)
+        if visible_player_ids is not None and player_id not in visible_player_ids:
+            return {
+                "accepted": False,
+                "error": "The shape is not available to this player.",
+            }
+
         if shape.is_expired(current_time):
             del server_state["active_shapes"][shape_id]
+            server_state["shape_visibility"].pop(shape_id, None)
             return {
                 "accepted": False,
                 "error": "The shape has expired.",
@@ -309,8 +392,22 @@ def process_click(server_state, player_id, shape_id, click_position):
         if awarded_points < 0 and current_time < player_effects["shield_until"]:
             awarded_points = 0
             shield_blocked_penalty = True
+        else:
+            awarded_points = player_stamina.adjust_shape_points(
+                awarded_points,
+                current_time,
+                player_effects["frozen_until"],
+            )
 
         del server_state["active_shapes"][shape_id]
+        server_state["shape_visibility"].pop(shape_id, None)
+        stamina_cost = click_result["stamina_cost"]
+        if stamina_cost > 0:
+            player_stamina.spend_for_click(
+                stamina_cost,
+                current_time,
+                player_effects["frozen_until"],
+            )
         server_state["scores"][player_id] += awarded_points
         apply_shape_effect(
             server_state,
@@ -485,12 +582,22 @@ def run_match(server_state):
         wait_time = min(server_state["shape_interval"], remaining_time)
 
         if wait_time > 0:
-            server_state["match_stop_event"].wait(wait_time)
+            wait_end_time = time.monotonic() + wait_time
+
+            while time.monotonic() < wait_end_time:
+                remaining_wait = wait_end_time - time.monotonic()
+                short_wait = min(STAMINA_UPDATE_INTERVAL, remaining_wait)
+
+                if server_state["match_stop_event"].wait(short_wait):
+                    break
+
+                broadcast_stamina_if_changed(server_state)
 
     with server_state["state_lock"]:
         disconnected_early = server_state["match_stop_event"].is_set()
         server_state["match_running"] = False
         server_state["active_shapes"].clear()
+        server_state["shape_visibility"].clear()
         winner = find_winner(server_state)
         final_scores = copy_scores_for_message(server_state)
 

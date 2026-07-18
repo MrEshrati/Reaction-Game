@@ -70,10 +70,11 @@ no longer needs to know how the expiration time was calculated.
 | `1` to `2` | Low |
 | `3` to `6` | High |
 
-`HallucinationShape` inherits from `NormalShape`, so it follows the same score
-rules. It overrides visibility so only its affected player can receive or
-claim it. Automatic hallucination generation will be connected to stress in
-Section 9.
+`HallucinationShape` inherits from `NormalShape`, so it keeps the hidden score
+category used by stamina and stress rules. It overrides its click result to
+award zero points and overrides visibility so only its affected player can
+receive or claim it. Automatic hallucination generation will be connected to
+stress in Section 9.
 
 ## Polymorphism
 
@@ -88,7 +89,7 @@ The result depends on the concrete object:
 - `NormalShape` returns its points and no effect;
 - `ShieldShape` returns a five-second shield effect;
 - `IceShape` returns a three-second freeze effect;
-- `HallucinationShape` uses normal scoring.
+- `HallucinationShape` uses normal stamina and stress rules but awards no score.
 
 The server does not need a large `if shape_type == ...` block to discover the
 effect. Each class provides its own implementation.
@@ -121,8 +122,8 @@ second shield: 10 seconds total
 The server stores the shield end time. The client only displays the remaining
 time and cannot decide whether a penalty is blocked.
 
-Shield effects on stamina and stress will be completed when those systems are
-implemented.
+Shield clicks do not consume stamina. Their stress behavior will be completed
+with that system in Section 9.
 
 ## Ice behavior
 
