@@ -6,4 +6,5 @@ server_state = create_server_state(
     shape_interval=0.8,
     shape_lifetime=1.5,
 )
+
 run_server(server_state)

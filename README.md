@@ -1,21 +1,45 @@
-# Fast Course Registration Game
+# Reaction Game - Final Version
 
-This repository contains a Python socket-programming project developed in
-small, testable sections. The final application will be a server-authoritative
-two-player reaction game with a Pygame client.
+## Folder structure
 
-## Progress
+```text
+Reaction-Game/
+|-- client.py              Start one Pygame client
+|-- server.py              Start the authoritative game server
+|-- requirements.txt       Python dependency list
+|-- client/                Pygame screens and client networking
+|-- server/                Match state, validation, and server networking
+|-- game/                  Shape and player classes
+`-- shared/                Protocol, settings, and threading helpers
+```
 
-- [x] Section 1: TCP socket fundamentals
-- [x] Section 2: Message protocol and framing
-- [x] Section 3: Threading fundamentals
-- [x] Section 4: Minimal authoritative game server
-- [x] Section 5: Basic Pygame client
-- [x] Section 6: Object-oriented shape system
-- [x] Section 7: Click validation and race-condition protection
-- [x] Section 8: Stamina system
-- [x] Section 9: Stress system
-- [x] Section 10: Game completion and reliability
-- [ ] Section 11: Testing and cleanup
+## Install
 
-The learning examples for each completed section are kept under `learning/`.
+Open PowerShell in the cloned project folder and install the dependency:
+
+```powershell
+python -m pip install pygame
+```
+
+## Run the game
+
+Start the server in the first terminal:
+
+```powershell
+python server.py
+```
+
+Start one client in a second terminal:
+
+```powershell
+python client.py
+```
+
+Start another client in a third terminal with the same command. The first
+connected player is the host and selects the match duration. The match begins
+automatically after the second player connects.
+
+The default address is `127.0.0.1:5050`, so both clients run on the same
+computer. To play across different computers, change `SERVER_HOST` in
+`client/game_client.py` to the server computer's local IP address and allow TCP
+port `5050` through the server computer's firewall.
